@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Test / tooling caches
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Generated optimizer outputs
+results/
+plan_out*.xlsx
+onboarding_*.xlsx
+full_plan_*.xlsx
+sites_with_new_customers*.xlsx
+ruby_fill_plan*.xlsx
+*_export.csv
+*_export.xlsx
+*_export.xls.csv
+*.zip
+
+# OS / editor
+.DS_Store
+.vscode/
+*.code-workspace
+
+# ---------------------------------------------------------------------------
+# Business data — deliberately NOT committed
+# ---------------------------------------------------------------------------
+# These workbooks and documents contain real customer information: ~220 named
+# hospitals and clinics with account codes and delivery schedules. They are
+# excluded so the repository holds code only. The test suite does not need them
+# (it uses tests/domain/sites_clean.csv, which carries anonymised IDs).
+#
+# To share them, do so through an approved internal channel rather than adding
+# them here — git history is effectively permanent.
+Copie de Ruby-Fill- Master Schedule.xlsx
+Ruby-Fill- Master Schedule*.xlsx
+RUBY Production_Planner_v5.xlsx
+Onboarding Recommendation_Ruby Generator.xlsx
+sites_input.xlsx
+sites_input_new.xlsx
+*.docx
+rubyfill/
+
+# Any real sites extract, wherever it is placed. The test suite generates its own
+# synthetic equivalent (see tests/fixtures.py), so no real data is needed to run it.
+sites_clean.csv
+**/sites_clean.csv

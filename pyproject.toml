@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ruby-fill-optimizer"
+version = "1.0.0"
+description = "Weekly production planner and cost optimizer for Ruby Fill generators."
+requires-python = ">=3.11"
+dependencies = [
+    "streamlit>=1.32.0",
+    "pandas>=2.0.0",
+    "openpyxl>=3.1.0",
+    "hypothesis>=6.100.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.setuptools]
+py-modules = ["integrated_cost_optimizer", "onboarding_recommendation", "app"]
+
+[tool.setuptools.packages.find]
+include = ["domain*", "services*", "io_adapters*", "ui*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-q"
