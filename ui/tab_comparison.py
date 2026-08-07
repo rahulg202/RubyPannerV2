@@ -70,7 +70,7 @@ def _render_result(result) -> None:
         )
 
     st.dataframe(
-        comparison_frame(result.components), use_container_width=True, hide_index=True
+        comparison_frame(result.components), width="stretch", hide_index=True
     )
     st.caption(
         "Penalty and overtime are where the optimizer earns its keep. The capacity "
@@ -88,13 +88,13 @@ def _render_result(result) -> None:
                     result.baseline.capacity_violations,
                     columns=["Week", "Planned", "Weekly capacity"],
                 ),
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
             )
 
     if result.weekly_comparison is not None:
         with st.expander("Week-by-week production", expanded=False):
             st.dataframe(
-                result.weekly_comparison, use_container_width=True, hide_index=True
+                result.weekly_comparison, width="stretch", hide_index=True
             )
             chart = result.weekly_comparison.set_index("Week")[
                 ["Manual_Production", "Optimized_Production"]
@@ -120,7 +120,7 @@ def _render_result(result) -> None:
                     }
                     for a in result.assigned_ids
                 ]),
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
             )
 
 

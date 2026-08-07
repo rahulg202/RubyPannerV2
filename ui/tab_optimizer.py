@@ -129,7 +129,7 @@ def _render_plan(result, settings) -> None:
         if cur is not None:
             st.caption(f"Today falls in planning week {cur}.")
         plan = mark_current_week(plan, cur)
-    st.dataframe(plan, use_container_width=True, hide_index=True)
+    st.dataframe(plan, width="stretch", hide_index=True)
 
 
 def _render_quota(result) -> None:
@@ -156,7 +156,7 @@ def _render_quota(result) -> None:
         if note:
             st.info(note)
 
-        st.dataframe(quota_frame(result.quota_status), use_container_width=True,
+        st.dataframe(quota_frame(result.quota_status), width="stretch",
                      hide_index=True)
 
         st.caption(
@@ -263,7 +263,7 @@ def _render_changed_weeks(result) -> None:
             view = view[view["Week_Shift"].abs().fillna(0) >= min_mag]
 
         st.caption(f"{len(view)} of {len(df)} generators shown.")
-        st.dataframe(view, use_container_width=True, hide_index=True)
+        st.dataframe(view, width="stretch", hide_index=True)
 
 
 def render(optimizer_service, settings_or_error) -> None:
@@ -336,7 +336,7 @@ def render(optimizer_service, settings_or_error) -> None:
         if result.issues_df.empty:
             st.info("No data quality issues found.")
         else:
-            st.dataframe(result.issues_df, use_container_width=True, hide_index=True)
+            st.dataframe(result.issues_df, width="stretch", hide_index=True)
 
     if result.xlsx_bytes:
         st.download_button(

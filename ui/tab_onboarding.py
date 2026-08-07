@@ -109,7 +109,7 @@ def _render_editor() -> list[NewCustomer]:
     edited = st.data_editor(
         _editor_frame(),
         num_rows="dynamic",
-        use_container_width=True,
+        width="stretch",
         key="ob_editor",
         column_config={
             "Site_ID": st.column_config.TextColumn(
@@ -165,7 +165,7 @@ def _render_rankings(result, customers) -> None:
                 continue
             st.dataframe(
                 rankings_frame(options, site_ids),
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
             )
             st.caption(
                 "Each row is one set of start weeks. The **Δ** columns show how "
@@ -234,7 +234,7 @@ def _render_selection_and_file(service, result, customers) -> None:
             "Then every": f"{cust.interval_weeks} weeks" if cust else "—",
             "Country": (cust.country if cust else "") or "—",
         })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
     cols = st.columns(4)
     cols[0].metric("Effect on total cost", usd_signed(selected.delta_composite),
