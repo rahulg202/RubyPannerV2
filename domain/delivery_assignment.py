@@ -101,9 +101,16 @@ def build_demand_events(
         country = str(row.get("country", ""))
         week = int(row["next_demand_week"])
         interval = int(row["interval_weeks"])
-        while week <= params.horizon_weeks:
-            events.append(DemandEvent(week, site_id, name, country))
-            week += interval
+        if interval < 0:
+            continue
+        if interval == 0:
+            # One-time delivery
+            if 1 <= week <= params.horizon_weeks:
+                events.append(DemandEvent(week, site_id, name, country))
+        else:
+            while week <= params.horizon_weeks:
+                events.append(DemandEvent(week, site_id, name, country))
+                week += interval
     events.sort(key=lambda e: (e.scheduled_week, e.site_id))
     return events
 

@@ -88,8 +88,8 @@ def clean_sites(
                 (idx, str(sid), f"Next_Demand_Week out of range 1..{params.horizon_weeks}")
             )
             bad_ids.add(str(sid))
-        if itv < 1:
-            issues.append((idx, str(sid), "Interval_Weeks must be >= 1"))
+        if itv < 0:
+            issues.append((idx, str(sid), "Interval_Weeks must be >= 0"))
             bad_ids.add(str(sid))
 
     # Exclude rows with data-quality problems
@@ -145,11 +145,16 @@ def build_weekly_demand(
     for _, row in active.iterrows():
         week = int(row["next_demand_week"])
         interval = int(row["interval_weeks"])
-        if interval < 1:
-            continue  # safety: skip malformed rows that would loop forever
-        while week <= params.horizon_weeks:
-            demand[week] += 1
-            week += interval
+        if interval < 0:
+            continue  # safety: skip malformed rows
+        if interval == 0:
+            # One-time delivery: demand only at next_demand_week, no recurrence
+            if 1 <= week <= params.horizon_weeks:
+                demand[week] += 1
+        else:
+            while week <= params.horizon_weeks:
+                demand[week] += 1
+                week += interval
 
     return demand
 
@@ -184,9 +189,15 @@ def build_weekly_row_demand(
     for _, row in row_sites.iterrows():
         week = int(row["next_demand_week"])
         interval = int(row["interval_weeks"])
-        while week <= params.horizon_weeks:
-            row_demand[week] += 1
-            week += interval
+        if interval < 0:
+            continue
+        if interval == 0:
+            if 1 <= week <= params.horizon_weeks:
+                row_demand[week] += 1
+        else:
+            while week <= params.horizon_weeks:
+                row_demand[week] += 1
+                week += interval
 
     return row_demand
 

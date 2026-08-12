@@ -156,9 +156,14 @@ def inject_customer_demand(
         if start is None:
             continue
         week = start
-        while 1 <= week <= T:
-            d[week] += 1
-            week += c.interval_weeks
+        if c.interval_weeks <= 0:
+            # One-time delivery at the selected start week
+            if 1 <= week <= T:
+                d[week] += 1
+        else:
+            while 1 <= week <= T:
+                d[week] += 1
+                week += c.interval_weeks
     return d
 
 
