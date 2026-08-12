@@ -68,6 +68,8 @@ def clean_sites(
     issues: List[Tuple[int, str, str]] = []
     active = d.loc[d["is_active"]].copy()
 
+    bad_ids: set = set()
+
     for idx, r in active.iterrows():
         sid = r["site_id"]
         ndw = r["next_demand_week_num"]
@@ -75,16 +77,24 @@ def clean_sites(
 
         if not sid or str(sid).lower() == "nan":
             issues.append((idx, str(sid), "Missing Site_ID"))
+            bad_ids.add(str(sid))
             continue
         if pd.isna(ndw) or pd.isna(itv):
             issues.append((idx, str(sid), "Missing Next_Demand_Week or Interval_Weeks"))
+            bad_ids.add(str(sid))
             continue
         if ndw < 1 or ndw > params.horizon_weeks:
             issues.append(
                 (idx, str(sid), f"Next_Demand_Week out of range 1..{params.horizon_weeks}")
             )
+            bad_ids.add(str(sid))
         if itv < 1:
             issues.append((idx, str(sid), "Interval_Weeks must be >= 1"))
+            bad_ids.add(str(sid))
+
+    # Exclude rows with data-quality problems
+    if bad_ids:
+        active = active[~active["site_id"].isin(bad_ids)].copy()
 
     # Report and exclude duplicate Site_IDs
     dupes = active["site_id"][active["site_id"].duplicated(keep=False)]
@@ -135,6 +145,8 @@ def build_weekly_demand(
     for _, row in active.iterrows():
         week = int(row["next_demand_week"])
         interval = int(row["interval_weeks"])
+        if interval < 1:
+            continue  # safety: skip malformed rows that would loop forever
         while week <= params.horizon_weeks:
             demand[week] += 1
             week += interval
