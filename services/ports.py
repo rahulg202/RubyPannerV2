@@ -83,6 +83,28 @@ class MasterPlannerReaderPort(Protocol):
 
 
 @runtime_checkable
+class MasterPlannerConverterPort(Protocol):
+    """Derives optimizer-ready site rows from the wide Master Planner.
+
+    Implemented by
+    ``io_adapters.master_planner_converter.MasterPlannerConverter``. ``convert``
+    returns a ``DerivedSiteSet``; ``write`` renders it as workbook bytes.
+    """
+
+    def convert(
+        self,
+        source: bytes,
+        sheet: str = "Schedule",
+        horizon_weeks: int = 52,
+        year: int | None = None,
+    ) -> Any:
+        ...
+
+    def write(self, result: Any) -> bytes:
+        ...
+
+
+@runtime_checkable
 class InputFileWriterPort(Protocol):
     """Generates an optimizer-ready input file including new customers.
 

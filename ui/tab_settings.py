@@ -42,6 +42,36 @@ def _text(label: str, name: str, *, help_text: str) -> None:
     )
 
 
+def _render_calibration_note() -> None:
+    """Explain what the calibration offset is for, and what it does not affect."""
+    with st.expander("What is the calibration offset for?"):
+        st.markdown(
+            "**It is a display setting.** It turns week numbers into calibration "
+            "dates. It does not change the plan, the costs, or which week anything "
+            "is made in.\n\n"
+            "The optimizer works in week numbers. To show dates instead, it uses "
+            "the two settings above:\n\n"
+            "- `MFG date for week N` = week 1 manufacturing date + 7 days × (N − 1)\n"
+            "- `Cal date for week N` = that week's MFG date + calibration offset\n\n"
+            "**Why one number covers all 52 weeks.** The tool steps forward in whole "
+            "7-day weeks, so every week's manufacturing date falls on the same "
+            "weekday as week 1. Anchor week 1 to a Monday and every week is a "
+            "Monday, so a single offset of 4 puts every calibration on a Friday. "
+            "That is why 4 is the default.\n\n"
+            "**What to set it to.** Count the days from the week 1 manufacturing "
+            "date you entered to its calibration Friday: Monday → 4, Tuesday → 3, "
+            "Wednesday → 2, Thursday → 1, Friday → 0. Use 0 if you would rather the "
+            "calibration date simply mirror the manufacturing date.\n\n"
+            "**Where it will look wrong.** If a real manufacturing date slips to a "
+            "different weekday — a holiday, a shutdown recovery week — the tool "
+            "keeps adding 7 days, so that row's calibration date will be a few days "
+            "out. Nothing downstream is affected: production quantities, costs, the "
+            "supplier split and the week each site is served are all decided before "
+            "any date is applied. For a week whose manufacturing day has moved, read "
+            "its calibration date from the Master Planner instead."
+        )
+
+
 def _render_quarter_alignment_note() -> None:
     """Warn when the chosen reference week produces partial quarters."""
     ref = st.session_state.get(cfg_key("reference_week_date"))
@@ -120,6 +150,7 @@ def render() -> None:
             _num("Calibration offset (days)", "calibration_offset_days",
                  help_text="Days from the manufacturing date to the calibration date",
                  step=1, min_value=0)
+        _render_calibration_note()
 
     # ---------------- Production constraints ----------------
     with st.expander("Production constraints", expanded=False):

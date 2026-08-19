@@ -27,6 +27,8 @@ __all__ = [
     "OnboardingResult",
     "ComparisonRequest",
     "ComparisonResult",
+    "ConversionRequest",
+    "ConversionResult",
 ]
 
 
@@ -132,4 +134,39 @@ class ComparisonResult:
     overtime_optimized: int = 0
     weekly_comparison: pd.DataFrame | None = None
     assigned_ids: list = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Conversion workflow (Master Planner -> optimizer input file)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ConversionRequest:
+    """Inputs for building an input file out of the manual plan."""
+
+    master_planner_bytes: bytes
+    master_planner_sheet: str = "Schedule"
+    horizon_weeks: int = 52
+    master_planner_year: int | None = None
+
+
+@dataclass
+class ConversionResult:
+    """A generated input file, with the mapping and checks that go with it."""
+
+    sites_df: pd.DataFrame
+    mapping_df: pd.DataFrame
+    notes_df: pd.DataFrame
+    xlsx_bytes: bytes
+    year: int | None = None
+    site_count: int = 0
+    active_count: int = 0
+    generated_code_count: int = 0
+    eu_restricted_count: int = 0
+    # Deliveries marked in the manual plan vs implied by the derived cadence —
+    # they should be close; a wide gap means the cadences need review.
+    scheduled_deliveries: int = 0
+    implied_deliveries: int = 0
+    issues_df: pd.DataFrame | None = None
     warnings: list[str] = field(default_factory=list)

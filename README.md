@@ -4,6 +4,10 @@ Plans 52 weeks of Ruby Fill generator production for ~180 hospital customers,
 minimising a weighted cost of early/late penalties, overtime, unused capacity,
 and raw-material supplier quota shortfalls.
 
+**For planners:** see **[USER_GUIDE.md](USER_GUIDE.md)** — every screen, every
+parameter, and every output column in plain language. The rest of this README is
+for developers.
+
 ## Running the app
 
 ```bash
@@ -19,11 +23,12 @@ python integrated_cost_optimizer.py --input sites.xlsx --output plan.xlsx --prin
 
 ## The unified workflow
 
-The application is one Streamlit app with four tabs. Settings apply everywhere.
+The application is one Streamlit app with five tabs. Settings apply everywhere.
 
 | Tab | What it does |
 |---|---|
 | **Settings** | Every cost, rate, weight, and constraint — production limits, cost rates and weights, QC shipping cap, supplier parameters, and the reference week. Values last for the session; use *Restore all defaults* to reset. |
+| **Import Manual Plan** | Reads the wide Master Planner and writes the optimizer's input sheet: one row per site with its code, first demand week, interval, country, and EU-restricted flag. Also emits a code-to-column mapping, which is what lets the Comparison tab match the two files. |
 | **Cost Optimizer** | Upload the sites file and run. Shows the weekly plan with manufacturing and calibration dates, supplier allocation, quarterly quota status, and which customers had their production week moved. Downloads a single workbook containing everything. |
 | **Onboarding** | Add several new customers at once, each with its own earliest and latest permissible start week. Ranks the options and hands back a ready-to-use input file with the new customers included. |
 | **Comparison** | Upload the Master Planner workbook to see what the optimizer saved against the plan your team built by hand. |
@@ -31,9 +36,11 @@ The application is one Streamlit app with four tabs. Settings apply everywhere.
 ### Typical sequence
 
 1. **Settings** — set the reference week so the plan shows real dates; confirm cost rates.
-2. **Cost Optimizer** — upload the sites file, run, review the plan and changed weeks.
-3. **Comparison** — upload the Master Planner to quantify the saving.
-4. **Onboarding** — evaluate new customers, download the updated input file, then
+2. **Import Manual Plan** — upload the Master Planner, build the input file, push it
+   straight into the Cost Optimizer.
+3. **Cost Optimizer** — run, review the plan and changed weeks.
+4. **Comparison** — quantify the saving against the manual plan.
+5. **Onboarding** — evaluate new customers, download the updated input file, then
    re-run the Cost Optimizer with it.
 
 ## Input file contract
@@ -45,11 +52,14 @@ Required columns (header names are case- and space-insensitive):
 | `Site_ID` | Unique per active row. Read as text, so account codes keep leading zeros (`00449` stays `00449`). |
 | `Active` | `Y`/`YES`/`TRUE`/`1` means active; anything else is ignored. |
 | `Next_Demand_Week` | 1..horizon. |
-| `Interval_Weeks` | >= 1. Weeks between replacements. |
+| `Interval_Weeks` | Weeks between replacements. `0` means a single one-time delivery at `Next_Demand_Week`. |
 
 Optional: `Country`, `Site_Name`, `EU_Restricted`. Any other columns pass through
 untouched. Data-quality problems are reported in the `Input_Issues` sheet rather
 than failing the run.
+
+The **Import Manual Plan** tab generates a conforming file straight from the
+Master Planner, so this contract rarely has to be satisfied by hand.
 
 ## Output workbook
 
@@ -126,6 +136,38 @@ than a routine cost.
   identifier (`RF-…`) listed in `Assigned_IDs`; share that mapping with the
   planning team so the same IDs can be used in future input sheets. If few sites
   match, the app warns rather than reporting every customer as new.
+- **Generating the input file guarantees a match.** The Import Manual Plan tab
+  derives site codes with the same scheme the Master Planner parser uses, so a
+  generated input file lines up with the manual plan without any manual step. On
+  the reference workbook, 202 of 203 columns match; the one exception is a
+  duplicated account number, which is renamed and reported rather than silently
+  merged.
+
+## Deriving the input file from the Master Planner
+
+`Import Manual Plan` inverts the wide sheet (a row per week, a column per site,
+`1` marking a scheduled generator) into a row per site.
+
+| Field | Derivation |
+|---|---|
+| `Site_ID` | Leading account number, else a stable `RF-<sha1_8>` code. Duplicates get a `-2` suffix and a warning. |
+| `Next_Demand_Week` | First week carrying a mark. |
+| `Interval_Weeks` | The `(N)` in the header; else the modal gap between marks; else `0` (one-time). Header wins, and a disagreement with the observed gaps is reported. |
+| `Country` | Word-boundary match on country and city tokens in the header, defaulting to `usa`. Word boundaries matter — "Swedish Medical Center, Bronx, NY" is a US site. |
+| `EU_Restricted` | Header cell shaded `FF002060`. Authoritative; a shaded column whose text implies a non-restricted country is flagged. |
+| `Active` | Whether the column has any mark in the selected year. |
+
+Rules live in `domain/site_derivation.py` (pure), workbook access in
+`io_adapters/master_planner_converter.py`, orchestration in
+`services/conversion_service.py`.
+
+### Generated input file
+
+| Sheet | Contents |
+|---|---|
+| `Sites` | Conforms to the input contract above; upload as-is |
+| `Site_Mapping` | Site code, Master Planner column letter and header, code and interval provenance |
+| `Conversion_Notes` | One row per thing the planner should check |
 
 ## Architecture
 

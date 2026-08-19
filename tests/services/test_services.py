@@ -417,3 +417,19 @@ def test_optimizer_service_passes_unified_export_sections():
     assert extras["assignments"], "assignments should be forwarded"
     assert extras["week_dates"], "week dates should be forwarded"
     assert extras["calibration_offset_days"] == 4
+
+
+# ---------------------------------------------------------------------------
+# Layering: services orchestrate through ports, never concrete adapters
+# ---------------------------------------------------------------------------
+
+def test_services_do_not_import_adapters():
+    import pathlib
+    import re
+
+    offenders = [
+        str(path)
+        for path in pathlib.Path("services").glob("*.py")
+        if re.search(r"^\s*(from|import)\s+io_adapters", path.read_text(), re.M)
+    ]
+    assert offenders == [], offenders

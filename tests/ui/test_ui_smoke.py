@@ -190,18 +190,49 @@ def test_settings_restore_defaults_populates_session():
 
 def test_workflow_tabs_render_with_validation_error():
     """A settings error must be shown, not raised, in every workflow tab."""
-    from ui import tab_comparison, tab_onboarding, tab_optimizer
+    from ui import tab_comparison, tab_converter, tab_onboarding, tab_optimizer
     S.init_state(st.session_state)
     err = ValidationError(["bad weight"])
     tab_optimizer.render(object(), err)
     tab_onboarding.render(object(), err)
     tab_comparison.render(object(), err)
+    tab_converter.render(object(), err)
+
+
+def test_converter_tab_renders_without_an_upload():
+    """With valid settings but no workbook, the tab prompts instead of running."""
+    from services.settings_service import DEFAULTS, build_settings
+    from ui import tab_converter
+    S.init_state(st.session_state)
+    tab_converter.render(object(), build_settings(dict(DEFAULTS)))
+
+
+def test_converter_tab_renders_a_result():
+    from services.dtos import ConversionResult
+    from services.settings_service import DEFAULTS, build_settings
+    from ui import tab_converter
+
+    S.init_state(st.session_state)
+    st.session_state[S.CONV_RESULT] = ConversionResult(
+        sites_df=pd.DataFrame({
+            "Site_ID": ["00449"], "Site_Name": ["Alpha"], "Active": ["Y"],
+            "Next_Demand_Week": [3], "Interval_Weeks": [7],
+            "Country": ["usa"], "EU_Restricted": ["N"],
+        }),
+        mapping_df=pd.DataFrame({"Site_ID": ["00449"]}),
+        notes_df=pd.DataFrame(columns=["Site_ID", "Note"]),
+        xlsx_bytes=b"XLSX",
+        year=2026, site_count=1, active_count=1,
+        scheduled_deliveries=7, implied_deliveries=7,
+        warnings=["check something"],
+    )
+    tab_converter.render(object(), build_settings(dict(DEFAULTS)))
 
 
 def test_app_module_imports_and_builds_services():
     import app
-    optimizer, onboarding, comparison = app.build_services()
-    assert optimizer and onboarding and comparison
+    optimizer, onboarding, comparison, conversion = app.build_services()
+    assert optimizer and onboarding and comparison and conversion
 
 
 def test_app_current_settings_returns_settings_or_error():
