@@ -1,5 +1,11 @@
-streamlit>=1.32.0
-pandas>=2.0.0
-openpyxl>=3.1.0
-hypothesis>=6.100.0
-pytest>=8.0.0
+# Pinned deliberately. Streamlit Cloud installs the newest release that satisfies
+# each specifier, so an open range meant local and Cloud ran different Streamlit
+# APIs — and a widget call that worked locally crashed in production. Pinning
+# keeps the two identical; bump these on purpose, then re-run the test suite.
+streamlit==1.61.1
+pandas==2.3.3
+openpyxl==3.1.5
+
+# Test-only, harmless in the deployed environment.
+pytest==9.0.1
+hypothesis==6.148.7
