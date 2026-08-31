@@ -91,9 +91,10 @@ def allocate_suppliers_weekly(
 
     Rules
     -----
-    - The first run of any split week is always Curium.
-    - A second Curium run is only permitted in three-run weeks: the pattern is
-      Curium, BWXT, Curium.
+    - The first run of any split week is always Curium; every later run is BWXT.
+      A two-run week is Curium, BWXT and a three-run week is Curium, BWXT, BWXT.
+    - Curium's run produces ``first_run_allocation`` generators, raised to cover
+      EU-restricted demand when that is larger. BWXT takes the remainder.
     - If a supplier is unavailable, it receives 0 generators that week.
     - EU-restricted demand must be covered by Curium generators; a BWXT-only
       week with EU-restricted demand is infeasible.
@@ -164,23 +165,23 @@ def allocate_suppliers_weekly(
         elif not bwxt_avail:
             curium_good, bwxt_good = y, 0
             sequence = [CURIUM] * batches
-        elif y <= first_run:
-            # Single Curium run covers the week.
-            curium_good, bwxt_good = y, 0
-            sequence = [CURIUM]
-        elif batches == 2:
-            curium_good = first_run
-            bwxt_good = y - first_run
-            sequence = [CURIUM, BWXT]
-        elif batches == 3:
-            # Only permitted three-run split: Curium, BWXT, Curium.
-            bwxt_good = min(y - first_run, mgpb)
-            curium_good = y - bwxt_good
-            sequence = [CURIUM, BWXT, CURIUM]
         else:
-            # batches == 1 with y > first_run (only if first_run < mgpb): one Curium run.
-            curium_good, bwxt_good = y, 0
-            sequence = [CURIUM]
+            # Curium runs first and exactly once; every later run is BWXT.
+            #
+            # Curium's share is first_run_allocation, lifted to cover
+            # EU-restricted demand when that is larger, since only Curium
+            # material may serve those sites. The lift stops at one batch: a
+            # bigger Curium share would need a second Curium run, which would
+            # both break the agreed pattern and exceed the run count the solver
+            # planned for the week. If EU-restricted demand ever exceeds one
+            # batch, ``eu_constraint_satisfied`` goes false and says so rather
+            # than the allocation quietly inventing an extra run.
+            curium_good = min(y, max(first_run, min(eu, mgpb)))
+            bwxt_good = y - curium_good
+            if bwxt_good == 0:
+                sequence = [CURIUM]
+            else:
+                sequence = [CURIUM] + [BWXT] * math.ceil(bwxt_good / mgpb)
 
         curium_activity = compute_activity(
             curium_good, supplier_params.curium_surplus_pct, supplier_params

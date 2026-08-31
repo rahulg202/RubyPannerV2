@@ -246,8 +246,9 @@ def render() -> None:
                  step=0.01, min_value=0.0, max_value=1.0, fmt="%.3f")
             _num("Sr-82 per batch / QC generator (mCi)", "per_batch_mci",
                  help_text="Activity consumed by the QC generator in each batch", step=1.0)
-            _num("First Curium run (generators)", "first_run_allocation",
-                 help_text="Generators in the first Curium run of a split week",
+            _num("Curium run (generators)", "first_run_allocation",
+                 help_text="Generators in the Curium run of a split week; Curium "
+                           "runs first and once, later runs are BWXT",
                  step=1, min_value=0)
             _num("BWXT quarterly quota (mCi)", "bwxt_quarterly_quota_mci",
                  help_text="Minimum BWXT order per quarter", step=500.0, min_value=0.0)

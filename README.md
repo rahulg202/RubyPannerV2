@@ -5,8 +5,14 @@ minimising a weighted cost of early/late penalties, overtime, unused capacity,
 and raw-material supplier quota shortfalls.
 
 **For planners:** see **[USER_GUIDE.md](USER_GUIDE.md)** — every screen, every
-parameter, and every output column in plain language. The rest of this README is
-for developers.
+parameter, and every output column in plain language.
+
+**For validating the model:** see **[TOOL_LOGIC.md](TOOL_LOGIC.md)** — assumptions,
+business rules, the objective function, the optimization method, worked scenarios on
+real data, and the development process. Section 1 lists every assumption that needs
+business confirmation.
+
+The rest of this README is for developers.
 
 ## Running the app
 

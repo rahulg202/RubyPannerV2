@@ -55,12 +55,19 @@ def test_curium_first(y):
         assert a.run_sequence[0] == CURIUM
 
 
-# Property 4: three-run pattern is exactly C-B-C
+# Property 4: three-run pattern is exactly C-B-B
 @settings(max_examples=100)
 @given(y=st.integers(min_value=31, max_value=45))
 def test_three_run_pattern(y):
     a = _alloc(y, 0)
-    assert a.run_sequence == [CURIUM, BWXT, CURIUM]
+    assert a.run_sequence == [CURIUM, BWXT, BWXT]
+
+
+# Property 4b: Curium never runs more than once while both suppliers are available
+@settings(max_examples=200)
+@given(y=st.integers(min_value=1, max_value=45))
+def test_curium_runs_at_most_once(y):
+    assert _alloc(y, 0).run_sequence.count(CURIUM) <= 1
 
 
 # Property 5: EU covered by Curium (when Curium available)

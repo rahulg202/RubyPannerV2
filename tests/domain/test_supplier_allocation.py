@@ -76,16 +76,52 @@ def test_two_run_split_curium_then_bwxt():
 
 
 @pytest.mark.parametrize("y,exp_curium,exp_bwxt", [
-    (31, 16, 15),
-    (35, 20, 15),
-    (45, 30, 15),
+    (31, 15, 16),
+    (35, 15, 20),
+    (45, 15, 30),
 ])
-def test_three_run_split_is_c_b_c(y, exp_curium, exp_bwxt):
+def test_three_run_split_is_c_b_b(y, exp_curium, exp_bwxt):
+    """Curium runs once; the second and third runs are both BWXT."""
     allocs = allocate_suppliers_weekly(_yplan(2, {1: y}), _eu(2), IntegratedParams(horizon_weeks=2), SP)
     a = allocs[0]
-    assert a.run_sequence == [CURIUM, BWXT, CURIUM]
+    assert a.run_sequence == [CURIUM, BWXT, BWXT]
     assert (a.curium_good, a.bwxt_good) == (exp_curium, exp_bwxt)
     assert a.curium_good + a.bwxt_good == y
+
+
+def test_curium_never_runs_twice_when_both_suppliers_available():
+    """The only permitted patterns are C, C-B and C-B-B."""
+    params = IntegratedParams(horizon_weeks=45)
+    allocs = allocate_suppliers_weekly(
+        [0] + list(range(1, 46)), _eu(45), params, SP
+    )
+    for a in allocs:
+        assert a.run_sequence.count(CURIUM) <= 1, a.run_sequence
+        assert a.run_sequence in ([], [CURIUM], [CURIUM, BWXT],
+                                 [CURIUM, BWXT, BWXT]), a.run_sequence
+
+
+def test_curium_share_is_lifted_to_cover_eu_demand():
+    """Only Curium material may serve EU-restricted sites."""
+    sp = SupplierParams(first_run_allocation=10)
+    allocs = allocate_suppliers_weekly(
+        _yplan(2, {1: 30}), _eu(2, {1: 13}), IntegratedParams(horizon_weeks=2), sp
+    )
+    a = allocs[0]
+    assert a.curium_good == 13          # lifted from 10 to cover the 13 EU units
+    assert a.bwxt_good == 17
+    assert a.eu_constraint_satisfied
+
+
+def test_eu_demand_beyond_one_batch_is_flagged_not_silently_reallocated():
+    """A second Curium run would break the pattern, so the shortfall is reported."""
+    allocs = allocate_suppliers_weekly(
+        _yplan(2, {1: 45}), _eu(2, {1: 20}), IntegratedParams(horizon_weeks=2), SP
+    )
+    a = allocs[0]
+    assert a.curium_good == 15                     # capped at one batch
+    assert a.run_sequence == [CURIUM, BWXT, BWXT]  # pattern preserved
+    assert not a.eu_constraint_satisfied           # and the problem is visible
 
 
 def test_curium_unavailable_all_bwxt_when_no_eu():

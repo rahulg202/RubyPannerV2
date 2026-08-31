@@ -4,6 +4,10 @@ A plain-language guide to every screen, every setting, and every column in the o
 
 **Live app:** https://rubypannerv2-hexy3fj6xdshhns2ggsrbx.streamlit.app
 
+**Looking for *why* the tool decides what it decides?** See
+[TOOL_LOGIC.md](TOOL_LOGIC.md) — assumptions, business rules, the objective function,
+the optimization method and worked scenarios.
+
 ---
 
 ## Contents
@@ -179,7 +183,7 @@ Sr-82 for each supplier run is calculated as:
 | **Minimum surplus (mCi)** | 20 | Floor on the surplus term, however small the run. |
 | **Curium surplus fraction** | 0.05 | Extra 5% required on Curium orders. |
 | **BWXT surplus fraction** | 0.02 | Extra 2% required on BWXT orders. |
-| **First Curium run (generators)** | 15 | In a three-run week the order is Curium → BWXT → Curium. This is how many generators the first Curium run makes. |
+| **Curium run (generators)** | 15 | Curium always runs first and only once; every later run in the week is BWXT. This is how many generators the Curium run makes, and BWXT takes the rest. Raised automatically if a week has more EU-restricted demand than this. |
 | **Curium quarterly quota (mCi)** | 10,000 | Minimum you must order from Curium per quarter. |
 | **BWXT quarterly quota (mCi)** | 10,000 | Minimum you must order from BWXT per quarter. |
 | **Quota shortfall penalty (USD per mCi)** | 50,000 | Charge per mCi below a quarterly minimum. **This is a placeholder** — see [section 11](#11-still-to-be-confirmed). |
@@ -402,7 +406,7 @@ the input file from the Master Planner is the cleanest way to run this compariso
 | **Cumulative_Composite_Cost_USD** | Running total from week 1. |
 | **Curium_Good** | Sellable generators from Curium material this week. |
 | **BWXT_Good** | Sellable generators from BWXT material this week. |
-| **Run_Sequence** | Order of supplier runs, e.g. `Curium, BWXT, Curium`. |
+| **Run_Sequence** | Order of supplier runs. One run is `Curium`, two is `Curium, BWXT`, three is `Curium, BWXT, BWXT`. |
 | **Supplier_Label** | Which suppliers were used: `Curium`, `BWXT`, or `Curium / BWXT`. |
 | **Curium_Activity_mCi** | Sr-82 ordered from Curium this week, surplus included. |
 | **BWXT_Activity_mCi** | Sr-82 ordered from BWXT this week, surplus included. |
@@ -534,7 +538,7 @@ should be replaced with your real ones before the output is used for decisions.
 |---|---|---|
 | **Supplier shortfall penalty** | $50,000 per mCi | The real commercial cost of missing a quarterly minimum. The current value was set deliberately high to make shortfalls effectively unacceptable; it dominates every other cost. |
 | **Quarterly quota** | 10,000 mCi each | Confirmation of the actual minimum for Curium and for BWXT. |
-| **Split-week allocation** | 15 generators in the first Curium run | Whether the split is a fixed count or a percentage of the week's output. |
+| **Split-week allocation** | 15 generators in the Curium run | Whether Curium's share is a fixed count or a percentage of the week's output. |
 | **Late penalty multiplier** | 100× the early rate | Whether late delivery should really be treated as this close to forbidden. |
 
 All four are editable in **Settings**, so you can try your own figures immediately.
