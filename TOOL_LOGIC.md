@@ -574,7 +574,7 @@ automated test.
 
 ### 10.3 Quality process
 
-- **583 automated tests**, organised by layer: pure business logic, service
+- **680 automated tests**, organised by layer: pure business logic, service
   orchestration with in-memory fakes, file handling, UI rendering, and end-to-end.
 - **Property-based tests** on the cost model and supplier rules — these generate
   hundreds of random inputs and assert invariants hold, rather than checking a handful
