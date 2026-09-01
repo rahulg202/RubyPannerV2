@@ -89,6 +89,76 @@ report(at)
 """))
 
 
+def test_week_pickers_migrate_a_legacy_comma_string():
+    """A session saved before the pickers existed must load, not crash.
+
+    The shutdown-week setting used to be free text. The picker now holds a list,
+    so anything stored as "10,11" has to be converted on sight — against the real
+    multiselect, which rejects a string where it expects a sequence of options.
+    """
+    _assert_rendered(_run(_HEADER + """
+from datetime import date
+
+at = AppTest.from_file("app.py", default_timeout=300)
+at.session_state["cfg_use_reference"] = True
+at.session_state["cfg_reference_week_date"] = date(2026, 1, 5)
+at.session_state["cfg_shutdown_weeks"] = "10,11"
+at.session_state["cfg_curium_unavailable_weeks"] = "3"
+at.run()
+report(at)
+
+migrated = at.session_state["cfg_shutdown_weeks"]
+assert migrated == [10, 11], migrated
+assert at.session_state["cfg_curium_unavailable_weeks"] == [3]
+print("migrated:", migrated)
+"""))
+
+
+def test_onboarding_window_renders_as_dates_with_a_reference_week():
+    """The window switches to date columns, and back, without losing rows."""
+    _assert_rendered(_run(_HEADER + """
+from datetime import date
+
+import pandas as pd
+
+at = AppTest.from_file("app.py", default_timeout=300)
+at.session_state["cfg_use_reference"] = True
+at.session_state["cfg_reference_week_date"] = date(2026, 1, 5)
+at.session_state["ob_customers"] = pd.DataFrame([{
+    "Site_ID": "NEW-1", "Site_Name": "Trial", "Earliest_Week": 3,
+    "Latest_Week": 9, "Interval_Weeks": 7, "Country": "usa",
+    "EU_Restricted": False,
+}])
+at.run()
+report(at)
+
+frame = at.session_state["ob_customers"]
+assert "Earliest_Date" in frame.columns, list(frame.columns)
+assert list(frame["Site_ID"]) == ["NEW-1"]
+print("columns:", list(frame.columns))
+"""))
+
+
+def test_onboarding_window_stays_numeric_without_a_reference_week():
+    _assert_rendered(_run(_HEADER + """
+import pandas as pd
+
+at = AppTest.from_file("app.py", default_timeout=300)
+at.session_state["ob_customers"] = pd.DataFrame([{
+    "Site_ID": "NEW-1", "Site_Name": "Trial", "Earliest_Week": 3,
+    "Latest_Week": 9, "Interval_Weeks": 7, "Country": "usa",
+    "EU_Restricted": False,
+}])
+at.run()
+report(at)
+
+frame = at.session_state["ob_customers"]
+assert "Earliest_Week" in frame.columns, list(frame.columns)
+assert "Earliest_Date" not in frame.columns
+print("columns:", list(frame.columns))
+"""))
+
+
 def test_optimizer_result_panel_renders():
     """The result tables (plan, quota, changed weeks) use the real dataframe API."""
     _assert_rendered(_run(_HEADER + """

@@ -38,6 +38,7 @@ The tool does four things:
 | You want to | Use this tab |
 |---|---|
 | Turn your manual plan into an optimizer input file | **Import Manual Plan** |
+| Check that your input file and manual plan refer to the same sites | **Comparison** |
 | Get a balanced 52-week production plan | **Cost Optimizer** |
 | Find the best week to start a new site | **Onboarding** |
 | See what the optimizer saved versus your manual plan | **Comparison** |
@@ -54,8 +55,9 @@ the tab and they are gone, so download anything you want to keep.
 The shortest path from your manual plan to an optimized plan:
 
 1. **Settings → Reference dates.** Tick *Use a reference week* and enter the
-   manufacturing date your Master Planner shows for week 1. This makes every result
-   show real dates instead of week numbers.
+   manufacturing date you want the plan to start from. This makes every result show
+   real dates instead of week numbers, and it fixes what "week 1" means everywhere —
+   the import, the optimizer and the comparison all then agree.
 2. **Import Manual Plan.** Upload the Master Planner workbook, press
    *Build input file*, then press *Use it in the Cost Optimizer now*.
 3. **Cost Optimizer.** Press *Run optimizer*. Read the plan, download the workbook.
@@ -135,8 +137,8 @@ manufacturing date.
 | **Test discard per batch** | 1 | Units pulled from each batch for QC testing. These are made but never sold. |
 | **Normal max batches/week** | 2 | Batches in an ordinary week. 2 × (16 − 1) = **30 sellable generators**. |
 | **Overtime max batches/week** | 3 | Batches when overtime is used. 3 × 15 = **45 sellable generators**. |
-| **Shutdown weeks** | empty | Weeks with no production at all. Comma-separated, e.g. `1,2,26`. |
-| **Partial shutdown weeks** | empty | Weeks limited to a single batch (15 generators). |
+| **Shutdown weeks** | none | Weeks with no production at all. Pick them from a list showing each week's start date. |
+| **Partial shutdown weeks** | none | Weeks limited to a single batch (15 generators). |
 
 ### Costs and weights
 
@@ -188,7 +190,7 @@ Sr-82 for each supplier run is calculated as:
 | **BWXT quarterly quota (mCi)** | 10,000 | Minimum you must order from BWXT per quarter. |
 | **Quota shortfall penalty (USD per mCi)** | 50,000 | Charge per mCi below a quarterly minimum. **This is a placeholder** — see [section 11](#11-still-to-be-confirmed). |
 | **Quarter start month** | 1 (January) | Which month quarter 1 begins in. |
-| **Curium / BWXT unavailable weeks** | empty | Weeks a supplier cannot supply. Comma-separated. |
+| **Curium / BWXT unavailable weeks** | none | Weeks a supplier cannot supply. Picked from a dated list. |
 
 Generators for the restricted European countries must come from Curium material, so
 the optimizer always fills that demand from the Curium runs first.
@@ -261,11 +263,35 @@ entries:
 | Shaded as EU-restricted but the header reads as 'usa' | Put the country in the header so the supply rule applies. |
 | More than one column with code `00460` | Two Master Planner columns share an account number. The second was renamed `00460-2`. Fix the header. |
 
-### Advanced: year
+### Choosing where week 1 is
 
-Week numbers repeat every year in the Master Planner, so one year has to be chosen.
-Left blank, the tool picks the year with the most fully-planned weeks. Enter a year
-to override it.
+Set a **reference week** in Settings and the import starts from it: that week becomes
+planning week 1, the tool reads 52 weeks forward — crossing into the next year if it
+needs to — and `Next_Demand_Week` is counted from there. The screen tells you exactly
+what week 1 is before and after you run it.
+
+Without a reference week the tool copies the Master Planner's own week numbers, which
+restart every January. That means the plan can only start at the beginning of a year,
+and `Next_Demand_Week` is counted from whatever the Master Planner calls week 1. On
+your workbook that row's manufacturing date is 28 December, not January, which is
+precisely the ambiguity a reference week removes.
+
+If the date you pick sits mid-week, the tool snaps to the week containing it and says
+which week it used. If fewer than 52 weeks exist after it, it says how many it found.
+
+**Advanced: year.** Only used when no reference week is set. Left blank, the tool
+picks the year with the most fully-planned weeks.
+
+### Making the site codes permanent
+
+If any column has no account number, press **Download Master Planner with codes
+added**. That gives you a copy of your workbook with the generated codes written into
+the column headers — formulas intact, your original untouched.
+
+This is worth doing once. Without it, a code for an unnumbered column is derived from
+the header text, so correcting a typo in a header changes the code and the site
+silently stops matching. With the code written in, it survives any edit. On your
+workbook 37 columns are affected.
 
 ---
 
@@ -329,25 +355,63 @@ A large *Moved later* count is not a problem in itself. It usually means the man
 plan was building stock earlier than it needed to, and the optimizer is holding less
 inventory.
 
+The panel opens with the match rate, because only matched sites can show a week shift.
+If every row says `New customer`, nothing matched — see the site match report in the
+Comparison tab.
+
+One caveat stated on the panel itself: the optimizer decides weekly *totals*, then a
+second step assigns those generators to customers. Where several sites are due in the
+same week, which one is recorded as moved is consistent between runs but arbitrary.
+The totals are reliable; treat an individual row as indicative.
+
 ---
 
 ## 6. Tab: Onboarding
 
-Finds the best start week for one or more new sites without breaking the existing
-plan.
+Finds the best start week for one or more new sites.
 
-1. Add a row per new site: its ID, name, country, interval, and the **earliest** and
-   **latest** week it could start. (A site that could go live in week 4 but must be
-   live by week 9 gets earliest 4, latest 9.)
-2. Upload the current sites file.
+1. Choose how the best week should be judged (see below).
+2. Add a row per new site: its ID, name, country, interval, and the **earliest** and
+   **latest** date it could start. With a reference week set these are date fields;
+   without one they stay week numbers. A date is snapped to the planning week
+   containing it. An interval of 0 means a single delivery.
 3. Run the recommendation.
 
-You get a ranked list of week combinations with the added cost of each, so you can
-pick a week that suits the customer rather than only the cheapest one. Once you have
-chosen, the tool generates an updated input file with the new sites already in it,
-ready for the Cost Optimizer.
+You get a ranked list of week combinations with the cost of each, so you can pick a
+week that suits the customer rather than only the cheapest one. Once you have chosen,
+the tool generates an updated input file with the new sites already in it, ready for
+the Cost Optimizer. Existing rows are copied through untouched; new rows are flagged
+`Is_New = Y`.
 
-Existing rows are copied through untouched. New rows are flagged `Is_New = Y`.
+### The two modes
+
+They answer different questions, and they can disagree. Both answers are valid.
+
+| Mode | Question it answers | Needs |
+|---|---|---|
+| **Re-plan all 52 weeks** | What is the cheapest start week if production is free to move? | The sites file |
+| **Keep my plan fixed** | My plan is already agreed — where does this site fit into it, and what does that cost? | The Master Planner |
+
+**Re-plan mode** re-optimizes the whole horizon for every candidate week and compares
+against a baseline of your existing sites. Adding a customer fills previously idle
+slots, so this mode often reports a *saving*.
+
+**Fixed mode** leaves your weekly production exactly as it is. Each generator the new
+site needs gets one of four outcomes:
+
+| Outcome | Meaning | Cost |
+|---|---|---|
+| Fits in a spare slot | That week was below 30 | Nothing |
+| Absorbed by an existing overtime week | The week already runs a third batch and had room | Nothing — you are already paying for that overtime |
+| Needs overtime | The week was full, so a third batch is run | The overtime rate, once per week |
+| Built early and held | The week was full and a nearby earlier week had room | The early-holding rate per week held |
+
+If none of those is possible the option is excluded and the reason given. Fixed mode
+does not include the idle-capacity cost, because your plan is fixed — its utilisation
+does not change, so charging it would answer a question you did not ask.
+
+On the same trial site, re-plan mode reported a $119,000 saving for week 1 while fixed
+mode reported $0 added cost. Neither is wrong; they are measuring different things.
 
 ---
 
@@ -367,6 +431,34 @@ the same model, component by component.
 **Where to look.** Penalty and overtime are where the optimizer earns its keep.
 Capacity barely moves between plans and can even come out slightly worse, because
 it is driven by demand versus factory size rather than by scheduling.
+
+### Site match report
+
+Every per-customer figure depends on matching a row in your input file to a column in
+the Master Planner. This panel shows how that went, row by row:
+
+| Column | Meaning |
+|---|---|
+| **Status** | `Matched`, `Not in the manual plan`, or `Not in the input file` |
+| **Issue** | What is wrong with this row |
+| **Suggested_Match** | The likeliest counterpart, based on the site name |
+| **How_To_Fix** | What to change |
+
+A suggestion is only ever a suggestion — nothing is matched automatically. A wrong
+automatic match would hide the discrepancy instead of showing it.
+
+If nothing matched at all, the panel says so plainly: the two files use different
+Site_ID conventions, and generating the input file from **Import Manual Plan** fixes
+it in one step. Note that suggestions need a `Site_Name` column in your input file to
+work; without names there is nothing to compare.
+
+### Which week is week 1
+
+If a reference week is set in Settings, the manual plan is read from that week forward
+so both plans line up on the same weeks. Without one, week 1 is whatever the Master
+Planner calls week 1. This matters: comparing an input file anchored to one starting
+week against a manual plan numbered from another would report changes that never
+happened.
 
 If you see *"Manual plan total does not equal total demand"*, the generator count in
 the Master Planner doesn't match the demand implied by the input file. That is
@@ -493,6 +585,12 @@ Sheets only appear when the run produced that data — no manual plan means no
 | **Site_Mapping** | Each site code beside its Master Planner column. Share with the planning team. |
 | **Conversion_Notes** | Everything from *Things to check*. |
 
+### Master Planner with site codes (Import Manual Plan)
+
+A copy of your own workbook with the generated codes written into the column headers.
+Formulas and every other sheet are preserved, and your original file is never
+modified. Replace your workbook with this copy and the codes become permanent.
+
 ---
 
 ## 10. Troubleshooting
@@ -503,8 +601,17 @@ Your sites file needs `Site_ID`, `Active`, `Next_Demand_Week` and `Interval_Week
 the right sheet.
 
 **Comparison says it can't match sites**
-The Master Planner and the input file have no site codes in common. Generate the
-input file from *Import Manual Plan* and the codes will match automatically.
+The Master Planner and the input file have no site codes in common. Open the **site
+match report** in the Comparison tab — it names every affected row and how to fix it.
+The one-step fix is to generate the input file from *Import Manual Plan*.
+
+**A site stopped matching after I edited the Master Planner**
+Its code was derived from the header text, so editing the header changed the code. Use
+**Download Master Planner with codes added** in Import Manual Plan; the codes are then
+written into the headers and survive edits.
+
+**Changed Customer Weeks shows everything as a new customer**
+No site matched. Same cause and fix as above.
 
 **Site IDs lost their leading zeros**
 The app preserves `00449` throughout. If your source file shows `449`, Excel

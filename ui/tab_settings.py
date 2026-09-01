@@ -11,8 +11,10 @@ from datetime import date
 
 import streamlit as st
 
+from domain.dates import derive_week_dates
 from domain.quota import compute_quarter_boundaries
-from services.settings_service import DEFAULTS
+from services.settings_service import DEFAULTS, parse_week_list
+from ui.formatting import week_option_label
 from ui.state import cfg_key, clear_results
 
 
@@ -39,6 +41,59 @@ def _text(label: str, name: str, *, help_text: str) -> None:
         key=cfg_key(name),
         value=st.session_state.get(cfg_key(name), default),
         help=f"{help_text} (default: {'empty' if default == '' else default})",
+    )
+
+
+def _horizon() -> int:
+    """Current horizon, read from session state so week pickers span the plan."""
+    try:
+        return max(1, int(st.session_state.get(cfg_key("horizon_weeks"),
+                                             DEFAULTS["horizon_weeks"])))
+    except (TypeError, ValueError):
+        return int(DEFAULTS["horizon_weeks"])
+
+
+def _week_dates() -> dict[int, date]:
+    """Planning week to its manufacturing date, empty when no reference week."""
+    ref = st.session_state.get(cfg_key("reference_week_date"))
+    if not isinstance(ref, date):
+        return {}
+    try:
+        offset = int(st.session_state.get(cfg_key("calibration_offset_days"),
+                                        DEFAULTS["calibration_offset_days"]))
+        return {
+            week: mfg
+            for week, mfg, _cal in derive_week_dates(ref, offset, _horizon())
+        }
+    except (TypeError, ValueError):
+        return {}
+
+
+def _weeks(label: str, name: str, *, help_text: str,
+           week_dates: dict[int, date]) -> None:
+    """Pick a set of weeks, labelled with real dates when a reference week is set.
+
+    These settings are a *set* of weeks rather than a range, so a date picker
+    would misrepresent them. A picker listing every week in the horizon, labelled
+    with its start date, removes the ambiguity of typing bare week numbers while
+    still expressing what the setting actually is.
+
+    Legacy comma-separated values held in session state are migrated on sight, so
+    a saved ``"1,2,26"`` keeps working.
+    """
+    key = cfg_key(name)
+    stored = st.session_state.get(key, DEFAULTS[name])
+    horizon = _horizon()
+    weeks, _error = parse_week_list(stored)
+    st.session_state[key] = [w for w in weeks if 1 <= w <= horizon]
+
+    st.multiselect(
+        label,
+        options=list(range(1, horizon + 1)),
+        key=key,
+        format_func=lambda w: week_option_label(w, week_dates),
+        help=f"{help_text} Leave empty for none.",
+        placeholder="None selected",
     )
 
 
@@ -152,6 +207,15 @@ def render() -> None:
                  step=1, min_value=0)
         _render_calibration_note()
 
+    # Week pickers below are labelled with real dates, which needs the reference
+    # week — so this is read after the Reference dates section has rendered.
+    week_dates = _week_dates()
+    if not week_dates:
+        st.caption(
+            "Set a reference week above and every week picker below will show "
+            "real dates instead of bare week numbers."
+        )
+
     # ---------------- Production constraints ----------------
     with st.expander("Production constraints", expanded=False):
         col1, col2, col3 = st.columns(3)
@@ -174,10 +238,13 @@ def render() -> None:
             _num("Overtime max batches/week", "overtime_max_batches",
                  help_text="Batches allowed when overtime is used", step=1, min_value=0)
 
-        _text("Shutdown weeks", "shutdown_weeks",
-              help_text="Comma-separated weeks with no production, e.g. 1,2,3")
-        _text("Partial shutdown weeks", "partial_shutdown_weeks",
-              help_text="Comma-separated weeks limited to a single batch")
+        _weeks("Shutdown weeks (no production)", "shutdown_weeks",
+               help_text="Weeks the factory produces nothing.",
+               week_dates=week_dates)
+        _weeks("Partial shutdown weeks (one batch only)",
+               "partial_shutdown_weeks",
+               help_text="Weeks limited to a single batch.",
+               week_dates=week_dates)
 
     # ---------------- Cost rates and weights ----------------
     with st.expander("Costs and weights", expanded=False):
@@ -260,10 +327,10 @@ def render() -> None:
              help_text="Month on which quarter 1 begins (1 = January)",
              step=1, min_value=1, max_value=12)
         _render_quarter_alignment_note()
-        col3, col4 = st.columns(2)
-        with col3:
-            _text("Curium unavailable weeks", "curium_unavailable_weeks",
-                  help_text="Comma-separated weeks Curium cannot supply")
-        with col4:
-            _text("BWXT unavailable weeks", "bwxt_unavailable_weeks",
-                  help_text="Comma-separated weeks BWXT cannot supply")
+        _weeks("Weeks Curium cannot supply", "curium_unavailable_weeks",
+               help_text="A week with EU-restricted demand cannot be selected "
+                         "here — those sites need Curium material.",
+               week_dates=week_dates)
+        _weeks("Weeks BWXT cannot supply", "bwxt_unavailable_weeks",
+               help_text="Curium covers the whole week instead.",
+               week_dates=week_dates)

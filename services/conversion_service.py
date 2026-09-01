@@ -18,7 +18,7 @@ from domain.demand import _norm_cols, build_weekly_demand, clean_sites
 from domain.params import IntegratedParams
 from domain.site_derivation import mapping_frame, notes_frame, sites_frame
 from services.dtos import ConversionRequest, ConversionResult
-from services.ports import MasterPlannerConverterPort
+from services.ports import MasterPlannerAnnotatorPort, MasterPlannerConverterPort
 
 # Flag the cadence model when implied deliveries drift more than this from the
 # manual plan. Some drift is expected: the optimizer models a repeating cadence,
@@ -29,8 +29,13 @@ DELIVERY_DRIFT_TOLERANCE = 0.10
 class ConversionService:
     """Orchestrates Master Planner -> optimizer input file conversion."""
 
-    def __init__(self, converter: MasterPlannerConverterPort) -> None:
+    def __init__(
+        self,
+        converter: MasterPlannerConverterPort,
+        annotator: MasterPlannerAnnotatorPort | None = None,
+    ) -> None:
         self._converter = converter
+        self._annotator = annotator
 
     def run(self, request: ConversionRequest) -> ConversionResult:
         """Convert the manual plan into an uploadable input file.
@@ -45,6 +50,7 @@ class ConversionService:
             request.master_planner_sheet,
             request.horizon_weeks,
             request.master_planner_year,
+            request.reference_week_date,
         )
 
         sites_df = sites_frame(derived.sites)
@@ -77,10 +83,34 @@ class ConversionService:
                 f"Site_Mapping sheet before optimizing."
             )
 
+        # Write the generated codes into a copy of the Master Planner, so the
+        # link between the two files stops depending on the header text staying
+        # byte-identical. Failure here must not lose the conversion itself.
+        annotated_bytes = None
+        codes_written = 0
+        if self._annotator is not None and derived.generated_codes:
+            try:
+                annotation = self._annotator.annotate(
+                    request.master_planner_bytes,
+                    derived.sites,
+                    request.master_planner_sheet,
+                )
+                annotated_bytes = annotation.xlsx_bytes
+                codes_written = annotation.written_count
+            except Exception as exc:  # noqa: BLE001 - reported, not fatal
+                warnings.append(
+                    f"Could not produce an annotated Master Planner copy: {exc}"
+                )
+
         return ConversionResult(
             sites_df=sites_df,
             mapping_df=mapping_frame(derived.sites),
             notes_df=notes_frame(derived.sites),
+            annotated_planner_bytes=annotated_bytes,
+            codes_written=codes_written,
+            anchor_date=getattr(derived, "anchor_date", None),
+            anchor_description=getattr(derived, "anchor_description", "") or "",
+            weeks_available=getattr(derived, "weeks_available", 0),
             xlsx_bytes=self._converter.write(derived),
             year=derived.year,
             site_count=len(derived.sites),

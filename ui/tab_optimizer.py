@@ -212,11 +212,36 @@ def _render_changed_weeks(result) -> None:
             )
         return
 
+    ms = result.match_summary or {}
+    everything_unmatched = (
+        cs.get("new_customers", 0) == cs.get("total", 0) and cs.get("total", 0) > 0
+    )
+
     with st.expander(
         f"Changed customer weeks vs manual plan — {cs.get('early', 0)} earlier, "
         f"{cs.get('late', 0)} later of {cs.get('total', 0)}",
-        expanded=False,
+        expanded=everything_unmatched,
     ):
+        # Site matching decides whether any of this is meaningful, so it goes
+        # first rather than sitting in a warning the planner may not scroll to.
+        if ms.get("input_rows"):
+            st.caption(
+                f"Matched **{ms.get('matched', 0)} of {ms['input_rows']}** input "
+                f"rows to a Master Planner column "
+                f"({ms.get('match_rate', 0.0):.0%}). Only matched sites can show a "
+                f"week shift. The Comparison tab lists any that did not match and "
+                f"how to fix them."
+            )
+
+        if everything_unmatched:
+            st.error(
+                "Every generator is listed as a new customer, which means no site "
+                "in your input file matched a Master Planner column. The two files "
+                "use different Site_ID conventions, so no week shift can be "
+                "calculated. Generate the input file from **Import Manual Plan** "
+                "and both files will share the same codes."
+            )
+
         cols = st.columns(4)
         cols[0].metric("Same week as manual", cs.get("unchanged", 0))
         cols[1].metric("Moved earlier", cs.get("early", 0))
@@ -228,6 +253,13 @@ def _render_changed_weeks(result) -> None:
             "either an improvement the optimizer found or a mistake in the manual "
             "schedule worth checking."
         )
+        st.caption(
+            "One caveat worth knowing: the optimizer decides weekly *totals*, then "
+            "a second step assigns those generators to customers. Where several "
+            "sites are due in the same week, which one is recorded as moved is "
+            "consistent between runs but arbitrary. The totals above are reliable; "
+            "treat an individual row as indicative."
+        )
         if cs.get("uncomparable"):
             st.caption(
                 f"{cs['uncomparable']} generator(s) had no counterpart in the "
@@ -236,13 +268,15 @@ def _render_changed_weeks(result) -> None:
             )
 
         df = changed_weeks_frame(result.assignments)
+        all_changes = ["Moved earlier", "Moved later", "Same as manual",
+                       "New customer", "No counterpart"]
         col1, col2, col3 = st.columns(3)
         with col1:
+            # Default to every category. Filtering to moves only used to render an
+            # empty table whenever nothing matched, which read as a broken feature.
             shift_filter = st.multiselect(
-                "Change", options=["Moved earlier", "Moved later",
-                                   "Same as manual", "New customer",
-                                   "No counterpart"],
-                default=["Moved earlier", "Moved later"], key="cw_shift_filter",
+                "Change", options=all_changes,
+                default=all_changes, key="cw_shift_filter",
             )
         with col2:
             countries = sorted(c for c in df["Country"].unique() if c)

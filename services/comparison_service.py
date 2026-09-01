@@ -8,6 +8,7 @@ comparison with savings.
 from __future__ import annotations
 
 from domain.comparison import compare_plans, compute_baseline_cost, weekly_comparison
+from domain.site_matching import build_match_report, summarize_match
 from services.dtos import ComparisonRequest, ComparisonResult
 from services.ports import MasterPlannerReaderPort
 
@@ -33,6 +34,7 @@ class ComparisonService:
             request.master_planner_sheet,
             request.params.horizon_weeks,
             request.master_planner_year,
+            request.reference_week_date,
         )
         warnings.extend(mp.issues)
         if mp.rows_excluded:
@@ -69,6 +71,22 @@ class ComparisonService:
         components = compare_plans(baseline.summary, request.optimized_summary)
         weekly = weekly_comparison(planned, request.optimized_plan_df, request.params)
 
+        # Row-level reconciliation. Named rows and a suggested fix beat a bare
+        # percentage when the planner has to work out why a site went missing.
+        match_report = build_match_report(
+            list(request.active_sites),
+            getattr(mp, "customer_headers", {}) or {},
+            mp.customer_schedule.keys(),
+        )
+        match_summary = summarize_match(match_report)
+        missing = match_summary.get("missing_from_manual_plan", 0)
+        if missing:
+            warnings.append(
+                f"{missing} input row(s) had no Master Planner column, so their "
+                f"per-customer figures are not comparable. See the site match "
+                f"report below for the affected rows and how to fix them."
+            )
+
         return ComparisonResult(
             components=components,
             baseline=baseline,
@@ -77,4 +95,6 @@ class ComparisonService:
             weekly_comparison=weekly,
             assigned_ids=mp.assigned_ids,
             warnings=warnings,
+            match_report=match_report,
+            match_summary=match_summary,
         )

@@ -8,13 +8,16 @@ optimizer input file once the planner confirms a selection.
 from __future__ import annotations
 
 import math
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
 
+from domain.dates import current_planning_week
 from domain.errors import RubyFillError, ValidationError
 from domain.onboarding import NewCustomer
 from services.dtos import OnboardingRequest
+from services.onboarding_service import MODE_FIXED, MODE_OPTIMIZE
 from ui import state as S
 from ui.formatting import XLSX_MIME, rankings_frame, usd_signed
 
@@ -35,11 +38,66 @@ OBJECTIVE_LABELS = {
 }
 
 
-def _editor_frame() -> pd.DataFrame:
+WEEK_COLUMNS = ("Earliest_Week", "Latest_Week")
+DATE_COLUMNS = ("Earliest_Date", "Latest_Date")
+
+
+def _date_for_week(reference: date, week: int) -> date:
+    return reference + timedelta(days=7 * (max(1, int(week)) - 1))
+
+
+def _week_for_date(reference: date, value, horizon: int, default: int) -> int:
+    """Planning week containing ``value``, clamped into the horizon."""
+    if isinstance(value, pd.Timestamp):
+        value = value.date()
+    if not isinstance(value, date):
+        return default
+    week = current_planning_week(reference, value, horizon)
+    if week is None:
+        # Before week 1, or past the horizon: clamp rather than silently drop.
+        return 1 if value < reference else horizon
+    return week
+
+
+def _editor_frame(reference: date | None, horizon: int) -> pd.DataFrame:
+    """The editor rows, migrated between week numbers and dates as needed.
+
+    Switching the reference week on or off must not cost the planner their rows,
+    so existing values are converted rather than reset.
+    """
     existing = st.session_state.get(S.OB_CUSTOMERS)
-    if isinstance(existing, pd.DataFrame) and not existing.empty:
-        return existing
-    return pd.DataFrame([dict(BLANK_ROW)])
+    frame = (
+        existing.copy()
+        if isinstance(existing, pd.DataFrame) and not existing.empty
+        else pd.DataFrame([dict(BLANK_ROW)])
+    )
+
+    if reference is not None:
+        for week_col, date_col in zip(WEEK_COLUMNS, DATE_COLUMNS):
+            if date_col not in frame.columns:
+                source = frame[week_col] if week_col in frame.columns else None
+                frame[date_col] = [
+                    _date_for_week(reference, _as_int(v, 1))
+                    for v in (source if source is not None else [1] * len(frame))
+                ]
+        frame = frame.drop(columns=[c for c in WEEK_COLUMNS if c in frame.columns])
+    else:
+        for week_col, date_col in zip(WEEK_COLUMNS, DATE_COLUMNS):
+            if week_col not in frame.columns:
+                if date_col in frame.columns:
+                    frame[week_col] = [
+                        _week_for_date(reference, v, horizon, 1)
+                        if reference else _as_int(v, 1)
+                        for v in frame[date_col]
+                    ]
+                else:
+                    frame[week_col] = BLANK_ROW[week_col]
+        frame = frame.drop(columns=[c for c in DATE_COLUMNS if c in frame.columns])
+
+    order = ["Site_ID", "Site_Name"]
+    order += list(DATE_COLUMNS if reference is not None else WEEK_COLUMNS)
+    order += ["Interval_Weeks", "Country", "EU_Restricted"]
+    return frame[[c for c in order if c in frame.columns]]
 
 
 def _as_int(value, default: int) -> int:
@@ -78,8 +136,16 @@ def _as_bool(value) -> bool:
     return bool(value)
 
 
-def _to_customers(df: pd.DataFrame) -> list[NewCustomer]:
-    """Build NewCustomer objects from the editor frame, skipping blank rows."""
+def _to_customers(
+    df: pd.DataFrame,
+    reference: date | None = None,
+    horizon: int = 52,
+) -> list[NewCustomer]:
+    """Build NewCustomer objects from the editor frame, skipping blank rows.
+
+    The onboarding window is entered as dates when a reference week is set and as
+    week numbers otherwise; either way it reaches the domain as week numbers.
+    """
     customers: list[NewCustomer] = []
     if df is None or not isinstance(df, pd.DataFrame):
         return customers
@@ -87,11 +153,17 @@ def _to_customers(df: pd.DataFrame) -> list[NewCustomer]:
         site_id = _as_text(row.get("Site_ID"))
         if not site_id:
             continue  # a blank row is still being filled in; ignore it
+        if reference is not None and "Earliest_Date" in df.columns:
+            earliest = _week_for_date(reference, row.get("Earliest_Date"), horizon, 1)
+            latest = _week_for_date(reference, row.get("Latest_Date"), horizon, earliest)
+        else:
+            earliest = _as_int(row.get("Earliest_Week"), 1)
+            latest = _as_int(row.get("Latest_Week"), 1)
         customers.append(NewCustomer(
             site_id=site_id,
             site_name=_as_text(row.get("Site_Name")),
-            earliest_week=_as_int(row.get("Earliest_Week"), 1),
-            latest_week=_as_int(row.get("Latest_Week"), 1),
+            earliest_week=earliest,
+            latest_week=latest,
             interval_weeks=_as_int(row.get("Interval_Weeks"), 7),
             country=_as_text(row.get("Country")).lower(),
             eu_restricted=_as_bool(row.get("EU_Restricted")),
@@ -99,31 +171,64 @@ def _to_customers(df: pd.DataFrame) -> list[NewCustomer]:
     return customers
 
 
-def _render_editor() -> list[NewCustomer]:
+def _render_editor(reference: date | None = None,
+                   horizon: int = 52) -> list[NewCustomer]:
     st.markdown("**New customers to onboard**")
     st.caption(
         "One row per customer. Site_ID is the elution system serial number for "
         "that site — enter it as your team assigns it. Each customer may have its "
-        "own earliest and latest permissible start week."
+        "own earliest and latest permissible start date."
     )
-    edited = st.data_editor(
-        _editor_frame(),
-        num_rows="dynamic",
-        width="stretch",
-        key="ob_editor",
-        column_config={
-            "Site_ID": st.column_config.TextColumn(
-                "Site_ID", help="Elution system serial number (assigned manually)."),
-            "Site_Name": st.column_config.TextColumn("Site_Name"),
+
+    use_dates = reference is not None
+    if use_dates:
+        last = reference + timedelta(days=7 * (horizon - 1))
+        st.caption(
+            f"Dates are snapped to the planning week containing them. The plan "
+            f"runs {reference:%d %b %Y} to {last:%d %b %Y}."
+        )
+    else:
+        st.caption(
+            "Set a reference week in **Settings** to enter these as dates instead "
+            "of week numbers."
+        )
+
+    window = (
+        {
+            "Earliest_Date": st.column_config.DateColumn(
+                "Can start from", format="DD MMM YYYY",
+                help="Earliest date this customer could be onboarded."),
+            "Latest_Date": st.column_config.DateColumn(
+                "Must start by", format="DD MMM YYYY",
+                help="Latest date by which this customer must be onboarded."),
+        }
+        if use_dates else
+        {
             "Earliest_Week": st.column_config.NumberColumn(
                 "Earliest week", min_value=1, step=1,
                 help="Earliest week this customer can be onboarded."),
             "Latest_Week": st.column_config.NumberColumn(
                 "Must onboard by", min_value=1, step=1,
                 help="Last week by which this customer must be onboarded."),
+        }
+    )
+
+    edited = st.data_editor(
+        _editor_frame(reference, horizon),
+        num_rows="dynamic",
+        width="stretch",
+        # Separate keys per mode: the columns differ, and reusing one key would
+        # leave Streamlit holding editor state for columns that no longer exist.
+        key=f"ob_editor_{'dates' if use_dates else 'weeks'}",
+        column_config={
+            "Site_ID": st.column_config.TextColumn(
+                "Site_ID", help="Elution system serial number (assigned manually)."),
+            "Site_Name": st.column_config.TextColumn("Site_Name"),
+            **window,
             "Interval_Weeks": st.column_config.NumberColumn(
-                "Interval", min_value=1, step=1,
-                help="Weeks between generator replacements."),
+                "Interval", min_value=0, step=1,
+                help="Weeks between generator replacements. 0 means a single "
+                     "one-time delivery."),
             "Country": st.column_config.TextColumn("Country"),
             "EU_Restricted": st.column_config.CheckboxColumn(
                 "Curium only",
@@ -132,7 +237,7 @@ def _render_editor() -> list[NewCustomer]:
         },
     )
     st.session_state[S.OB_CUSTOMERS] = edited
-    return _to_customers(edited)
+    return _to_customers(edited, reference, horizon)
 
 
 def _render_estimate(service, customers) -> bool:
@@ -152,6 +257,100 @@ def _render_estimate(service, customers) -> bool:
             "few minutes."
         )
     return est["exhaustive"]
+
+
+def _render_mode() -> str:
+    """Choose between re-planning and slotting into the existing plan."""
+    choice = st.radio(
+        "How should the best week be judged?",
+        options=[MODE_OPTIMIZE, MODE_FIXED],
+        format_func=lambda m: (
+            "Re-plan all 52 weeks (cheapest week if production can move)"
+            if m == MODE_OPTIMIZE
+            else "Keep my plan fixed (where does this site fit into it?)"
+        ),
+        key="ob_mode",
+        horizontal=False,
+    )
+    if choice == MODE_FIXED:
+        st.caption(
+            "Weekly production is taken from your Master Planner and does not "
+            "move. Each generator either drops into a week with a spare slot, "
+            "needs a third batch, or is built earlier and held. The cost shown is "
+            "what accommodating the site adds — nothing else in the plan changes."
+        )
+    else:
+        st.caption(
+            "The whole 52 weeks are re-optimized for every candidate start week, "
+            "and the cost is compared against a baseline of your existing sites. "
+            "This finds the cheapest week when production is free to move."
+        )
+    return choice
+
+
+def _render_fixed_rankings(result, customers) -> None:
+    """Ranked start weeks measured against a plan held fixed."""
+    site_ids = [c.site_id for c in customers]
+    options = result.fixed_rankings
+
+    st.caption(
+        f"Read from your Master Planner, which has production in "
+        f"{result.fixed_plan_weeks} week(s)."
+    )
+    for warning in getattr(result, "warnings", [])[:4]:
+        st.warning(warning)
+
+    if not options:
+        st.error(
+            "No start week worked. Every candidate week left at least one "
+            "generator with nowhere to go — the plan is at the overtime ceiling "
+            "in those weeks and no nearby week has a spare slot. Widen the "
+            "onboarding window, or free up capacity."
+        )
+        return
+
+    rows = []
+    for option in options:
+        row = {f"Week for {sid}": option.selected_weeks.get(sid) for sid in site_ids}
+        row.update({
+            "Added cost": usd_signed(option.added_cost),
+            "Generators": option.generators,
+            "Fit a spare slot": option.fits,
+            "Absorbed by existing overtime": option.absorbed,
+            "Needed new overtime": option.overtime_added,
+            "Built early and held": option.shifted,
+            "No disruption": "Yes" if option.fits_cleanly else "No",
+        })
+        rows.append(row)
+
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    st.caption(
+        "**Added cost** is what slotting the site in costs on top of your current "
+        "plan: a third batch where a week is full, or holding cost where a "
+        "generator has to be built early. Zero means it fits with no disruption. "
+        "**Absorbed by existing overtime** means the week already runs a third "
+        "batch and had room, so there is no extra charge. Idle-capacity cost is "
+        "not included here — your plan is fixed, so its utilisation does not "
+        "change."
+    )
+
+    best = options[0]
+    with st.expander(f"Where each generator would go — best option "
+                     f"({usd_signed(best.added_cost)})"):
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Site_ID": p.site_id,
+                    "Due week": p.due_week,
+                    "Made in week": p.produced_week,
+                    "Outcome": p.outcome,
+                    "Cost": usd_signed(p.cost),
+                    "Detail": p.detail,
+                }
+                for p in best.placements
+            ]),
+            width="stretch", hide_index=True,
+        )
 
 
 def _render_rankings(result, customers) -> None:
@@ -194,11 +393,16 @@ def _render_selection_and_file(service, result, customers) -> None:
         "Optimizer tab."
     )
 
-    # Gather every distinct combination that appeared in any ranking.
+    # Gather every distinct combination that appeared in any ranking. Fixed-plan
+    # mode ranks on a single measure, so its options are already a flat list.
     seen: dict[tuple, object] = {}
-    for options in result.rankings.values():
-        for opt in options:
+    if getattr(result, "mode", MODE_OPTIMIZE) == MODE_FIXED:
+        for opt in result.fixed_rankings:
             seen.setdefault(opt.key(), opt)
+    else:
+        for options in result.rankings.values():
+            for opt in options:
+                seen.setdefault(opt.key(), opt)
     combos = list(seen.values())
     if not combos:
         st.info("No feasible combination to select.")
@@ -308,14 +512,29 @@ def render(onboarding_service, settings_or_error) -> None:
         return
     settings = settings_or_error
 
+    mode = _render_mode()
+    have_mp = st.session_state.get(S.MP_BYTES) is not None
     have_file = st.session_state.get(S.SITES_BYTES) is not None
-    if not have_file:
-        st.info(
-            "Upload a sites file in the Cost Optimizer tab first — the engine "
-            "needs your existing demand as the baseline."
-        )
 
-    customers = _render_editor()
+    if mode == MODE_FIXED:
+        ready = have_mp
+        if not have_mp:
+            st.info(
+                "Upload the Master Planner workbook first — in **Import Manual "
+                "Plan** or **Comparison**. This mode reads your existing weekly "
+                "production from it."
+            )
+    else:
+        ready = have_file
+        if not have_file:
+            st.info(
+                "Upload a sites file in the Cost Optimizer tab first — the engine "
+                "needs your existing demand as the baseline."
+            )
+
+    customers = _render_editor(
+        settings.reference_week_date, settings.params.horizon_weeks
+    )
     if not customers:
         st.info("Add at least one new customer above.")
         return
@@ -323,15 +542,15 @@ def render(onboarding_service, settings_or_error) -> None:
     _render_estimate(onboarding_service, customers)
 
     if st.button("Run recommendation", type="primary", key="ob_run",
-                 disabled=not have_file):
+                 disabled=not ready):
         progress_bar = st.progress(0.0, text="Starting...")
 
         def on_progress(fraction: float, message: str) -> None:
             progress_bar.progress(min(max(fraction, 0.0), 1.0), text=message)
 
         request = OnboardingRequest(
-            file_bytes=st.session_state[S.SITES_BYTES],
-            filename=st.session_state[S.SITES_NAME],
+            file_bytes=st.session_state.get(S.SITES_BYTES) or b"",
+            filename=st.session_state.get(S.SITES_NAME) or "sites.xlsx",
             sheet=st.session_state.get(S.SITES_SHEET) or "Sites",
             new_customers=tuple(customers),
             params=settings.params,
@@ -339,6 +558,9 @@ def render(onboarding_service, settings_or_error) -> None:
             shutdown_weeks=settings.shutdown_weeks,
             partial_shutdown_weeks=settings.partial_shutdown_weeks,
             reference_week_date=settings.reference_week_date,
+            mode=mode,
+            master_planner_bytes=st.session_state.get(S.MP_BYTES),
+            master_planner_sheet=st.session_state.get(S.MP_SHEET) or "Schedule",
         )
         try:
             st.session_state[S.OB_RESULT] = onboarding_service.run(request, on_progress)
@@ -375,5 +597,8 @@ def render(onboarding_service, settings_or_error) -> None:
             for reason in result.infeasible_reasons:
                 st.write(f"- {reason}")
 
-    _render_rankings(result, customers)
+    if getattr(result, "mode", MODE_OPTIMIZE) == MODE_FIXED:
+        _render_fixed_rankings(result, customers)
+    else:
+        _render_rankings(result, customers)
     _render_selection_and_file(onboarding_service, result, customers)

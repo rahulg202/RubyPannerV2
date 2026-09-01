@@ -19,6 +19,7 @@ from domain.delivery_assignment import (
 )
 from domain.demand import build_weekly_demand, build_weekly_row_demand, clean_sites
 from domain.errors import InfeasiblePlanError
+from domain.site_matching import build_match_report, summarize_match
 from domain.supplier_solve import solve_with_suppliers
 from services.dtos import OptimizeRequest, OptimizationResult
 from services.ports import (
@@ -29,6 +30,18 @@ from services.ports import (
 
 
 LOW_MATCH_THRESHOLD = 0.5
+
+
+def _input_sites(active_df) -> list[tuple[str, str]]:
+    """Extract ``(site_id, site_name)`` pairs for the match report."""
+    has_name = "site_name" in active_df.columns
+    return [
+        (
+            str(row["site_id"]).strip(),
+            str(row["site_name"]) if has_name else "",
+        )
+        for _, row in active_df.iterrows()
+    ]
 
 
 def _match_rate_warnings(active_df, customer_schedule: dict) -> list[str]:
@@ -120,10 +133,16 @@ class OptimizerService:
         # --- Compare against the manual plan (the change that matters) ---
         # Without a manual plan there is nothing to compare against, so the
         # changed-week report stays empty rather than substituting due dates.
+        match_report: list = []
+        match_summary: dict = {}
         if request.master_planner_bytes and self._master_planner_reader:
             try:
                 manual = self._master_planner_reader.parse(
-                    request.master_planner_bytes, request.master_planner_sheet
+                    request.master_planner_bytes,
+                    request.master_planner_sheet,
+                    request.params.horizon_weeks,
+                    None,
+                    request.reference_week_date,
                 )
                 assignments = compare_against_manual_plan(
                     assignments, manual.customer_schedule
@@ -131,6 +150,14 @@ class OptimizerService:
                 warnings.extend(
                     _match_rate_warnings(active_df, manual.customer_schedule)
                 )
+                # Row-level reconciliation, so a failed match names the site and
+                # the fix rather than only reporting a percentage.
+                match_report = build_match_report(
+                    _input_sites(active_df),
+                    getattr(manual, "customer_headers", {}) or {},
+                    manual.customer_schedule.keys(),
+                )
+                match_summary = summarize_match(match_report)
             except Exception as exc:  # adapter/parse problem must not fail the run
                 warnings.append(f"Could not compare against the manual plan: {exc}")
         else:
@@ -179,4 +206,6 @@ class OptimizerService:
             week_dates=week_dates,
             xlsx_bytes=xlsx_bytes,
             warnings=warnings,
+            match_report=match_report,
+            match_summary=match_summary,
         )

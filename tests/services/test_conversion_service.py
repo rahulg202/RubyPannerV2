@@ -35,7 +35,8 @@ class FakeConverter:
         self.calls: list[tuple] = []
         self.written: list[DerivedSiteSet] = []
 
-    def convert(self, source, sheet="Schedule", horizon_weeks=52, year=None):
+    def convert(self, source, sheet="Schedule", horizon_weeks=52, year=None,
+                reference_week_date=None):
         self.calls.append((source, sheet, horizon_weeks, year))
         return self.derived
 

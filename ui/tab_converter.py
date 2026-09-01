@@ -19,6 +19,7 @@ from ui import state as S
 from ui.formatting import XLSX_MIME
 
 GENERATED_FILENAME = "sites_from_manual_plan.xlsx"
+ANNOTATED_FILENAME = "master_planner_with_site_codes.xlsx"
 
 
 def _upload_master_planner() -> str:
@@ -55,13 +56,33 @@ def _upload_master_planner() -> str:
     return st.session_state.get(S.MP_SHEET) or "Schedule"
 
 
+def _render_anchor_status(settings) -> None:
+    """State what planning week 1 will be, before the planner presses the button."""
+    ref = settings.reference_week_date
+    if ref is not None:
+        st.success(
+            f"**Planning week 1 = the week of {ref:%d %b %Y}.** The import reads "
+            f"{settings.params.horizon_weeks} weeks forward from there, crossing "
+            f"the year boundary if it needs to, and `Next_Demand_Week` is counted "
+            f"from that week."
+        )
+    else:
+        st.warning(
+            "**No reference week set.** Week numbers will be copied from the "
+            "Master Planner, which restarts its numbering every January — so "
+            "`Next_Demand_Week` is counted from the first week of whichever year "
+            "is read, and the plan cannot start mid-year. Set a reference week in "
+            "**Settings** to choose your own starting week."
+        )
+
+
 def _year_override() -> int | None:
-    """Optional year picker. Blank means let the tool choose."""
+    """Optional year picker, only relevant when no reference week is set."""
     with st.expander("Advanced", expanded=False):
         st.caption(
-            "Week numbers repeat every year in the Master Planner, so one year "
-            "has to be chosen. Left blank, the tool picks the year with the most "
-            "fully-planned weeks."
+            "Only used when no reference week is set. Week numbers repeat every "
+            "year in the Master Planner, so one year has to be chosen. Left blank, "
+            "the tool picks the year with the most fully-planned weeks."
         )
         raw = st.text_input(
             "Year to read (optional)", value="", key="conv_year",
@@ -93,8 +114,16 @@ def _render_metrics(result) -> None:
              "stable code instead.",
     )
 
+    if result.anchor_description:
+        st.info(f"**{result.anchor_description}**")
+
+    source = (
+        f"anchored to the week of **{result.anchor_date:%d %b %Y}**"
+        if result.anchor_date is not None
+        else f"read from the **{result.year}** calendar-year rows"
+    )
     st.caption(
-        f"Read from the **{result.year}** rows. The manual plan schedules "
+        f"Weeks {source}. The manual plan schedules "
         f"**{result.scheduled_deliveries}** deliveries that year; the cadences "
         f"derived here imply **{result.implied_deliveries}**. These should be "
         f"close — the manual plan shifts individual weeks for holidays, while the "
@@ -119,6 +148,25 @@ def _render_result(result) -> None:
         key="conv_download",
         type="primary",
     )
+    if result.annotated_planner_bytes and result.codes_written:
+        st.download_button(
+            f"Download Master Planner with {result.codes_written} code(s) added",
+            data=result.annotated_planner_bytes,
+            file_name=ANNOTATED_FILENAME,
+            mime=XLSX_MIME,
+            key="conv_download_annotated",
+            help="A copy of your workbook with the generated codes written into "
+                 "the column headers. Your original file is not changed.",
+        )
+        st.caption(
+            f"**Worth doing once.** {result.codes_written} of your Master Planner "
+            f"columns have no account number, so their code is currently derived "
+            f"from the header text. Edit that text — even to fix a typo — and the "
+            f"code changes and the site quietly stops matching. This copy writes "
+            f"the codes into the headers so they become permanent. Replace your "
+            f"workbook with it and the problem goes away for good."
+        )
+
     if st.button("Use it in the Cost Optimizer now", key="conv_use"):
         st.session_state[S.SITES_BYTES] = result.xlsx_bytes
         st.session_state[S.SITES_NAME] = GENERATED_FILENAME
@@ -181,7 +229,6 @@ def render(conversion_service, settings_or_error) -> None:
     )
 
     sheet = _upload_master_planner()
-    year = _year_override()
 
     if isinstance(settings_or_error, ValidationError):
         st.error("Fix these settings before converting:")
@@ -189,6 +236,9 @@ def render(conversion_service, settings_or_error) -> None:
             st.write(f"- {message}")
         return
     settings = settings_or_error
+
+    _render_anchor_status(settings)
+    year = _year_override()
 
     have_mp = st.session_state.get(S.MP_BYTES) is not None
     if not have_mp:
@@ -201,6 +251,7 @@ def render(conversion_service, settings_or_error) -> None:
             master_planner_sheet=sheet,
             horizon_weeks=settings.params.horizon_weeks,
             master_planner_year=year,
+            reference_week_date=settings.reference_week_date,
         )
         with st.spinner("Reading the manual plan and deriving sites..."):
             try:

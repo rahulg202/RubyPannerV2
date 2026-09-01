@@ -13,6 +13,7 @@ import streamlit as st
 
 from domain.demand import build_weekly_demand
 from domain.errors import RubyFillError, ValidationError
+from domain.site_matching import STATUS_MATCHED, match_report_frame
 from services.dtos import ComparisonRequest
 from ui import state as S
 from ui.formatting import comparison_frame, usd, usd_signed
@@ -46,6 +47,65 @@ def _upload_master_planner() -> str:
         st.session_state[S.MP_SHEET] = choice
         return choice
     return st.session_state.get(S.MP_SHEET) or "Schedule"
+
+
+def _render_match_report(result) -> None:
+    """Row-level reconciliation between the input file and the manual plan."""
+    if not result.match_report:
+        return
+
+    summary = result.match_summary or {}
+    matched = summary.get("matched", 0)
+    input_rows = summary.get("input_rows", 0)
+    missing_manual = summary.get("missing_from_manual_plan", 0)
+    missing_input = summary.get("missing_from_input_file", 0)
+    rate = summary.get("match_rate", 0.0)
+
+    label = f"Site match report — {matched} of {input_rows} matched ({rate:.0%})"
+    if missing_manual or missing_input:
+        label += f", {missing_manual + missing_input} to review"
+
+    with st.expander(label, expanded=bool(missing_manual)):
+        cols = st.columns(3)
+        cols[0].metric("Matched", f"{matched} / {input_rows}")
+        cols[1].metric(
+            "Not in the manual plan", missing_manual,
+            help="Input rows with no Master Planner column. Their per-customer "
+                 "figures cannot be compared.",
+        )
+        cols[2].metric(
+            "Not in the input file", missing_input,
+            help="Master Planner columns with no active input row. Their "
+                 "generators are missing from the optimized plan.",
+        )
+
+        if matched == 0 and input_rows:
+            st.error(
+                "Nothing matched. The two files use different Site_ID "
+                "conventions, so every per-customer comparison is meaningless. "
+                "Generate the input file from **Import Manual Plan** and both "
+                "files will share the same codes."
+            )
+        elif missing_manual or missing_input:
+            st.caption(
+                "Each row below names the problem and how to fix it. Suggested "
+                "matches are based on the site name and are **suggestions only** "
+                "— nothing is matched automatically, because a wrong automatic "
+                "match would hide the discrepancy rather than show it."
+            )
+        else:
+            st.success("Every input row matched a Master Planner column.")
+
+        view = match_report_frame(result.match_report)
+        show_all = st.checkbox(
+            "Include matched rows", value=False, key="cmp_match_show_all"
+        )
+        if not show_all:
+            view = view[view["Status"] != STATUS_MATCHED]
+        if view.empty:
+            st.info("No rows to review.")
+        else:
+            st.dataframe(view, width="stretch", hide_index=True)
 
 
 def _render_result(result) -> None:
@@ -101,6 +161,8 @@ def _render_result(result) -> None:
             ]
             st.line_chart(chart)
 
+    _render_match_report(result)
+
     if result.assigned_ids:
         with st.expander(
             f"Generated identifiers for unnumbered customers "
@@ -140,6 +202,20 @@ def render(comparison_service, settings_or_error) -> None:
         return
     settings = settings_or_error
 
+    if settings.reference_week_date is not None:
+        st.caption(
+            f"Comparing from **week 1 = {settings.reference_week_date:%d %b %Y}**, "
+            f"the reference week set in Settings. The manual plan is read from that "
+            f"week forward, so both plans line up on the same weeks."
+        )
+    else:
+        st.caption(
+            "No reference week set, so the manual plan is read by calendar year "
+            "and week 1 is whatever the Master Planner calls week 1. Set a "
+            "reference week in **Settings** to compare from a chosen starting "
+            "point."
+        )
+
     opt_result = st.session_state.get(S.OPT_RESULT)
     have_mp = st.session_state.get(S.MP_BYTES) is not None
 
@@ -151,6 +227,12 @@ def render(comparison_service, settings_or_error) -> None:
     ready = opt_result is not None and have_mp
     if st.button("Run comparison", type="primary", key="cmp_run", disabled=not ready):
         demand = build_weekly_demand(opt_result.active_df, settings.params)
+        active = opt_result.active_df
+        has_name = "site_name" in active.columns
+        active_sites = tuple(
+            (str(r["site_id"]).strip(), str(r["site_name"]) if has_name else "")
+            for _, r in active.iterrows()
+        )
         request = ComparisonRequest(
             master_planner_bytes=st.session_state[S.MP_BYTES],
             master_planner_sheet=sheet,
@@ -160,6 +242,8 @@ def render(comparison_service, settings_or_error) -> None:
             params=settings.params,
             shutdown_weeks=settings.shutdown_weeks,
             partial_shutdown_weeks=settings.partial_shutdown_weeks,
+            reference_week_date=settings.reference_week_date,
+            active_sites=active_sites,
         )
         with st.spinner("Reading the Master Planner and evaluating the manual plan..."):
             try:

@@ -159,3 +159,16 @@ def rankings_frame(options: Sequence, site_ids: Sequence[str]) -> pd.DataFrame:
         })
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def week_option_label(week: int, week_dates: dict) -> str:
+    """Label a planning week for a picker, adding its start date when known.
+
+    Week numbers alone are ambiguous once a plan can start mid-year, which is why
+    every week picker shows the date beside the number. Falls back to the bare
+    week number when no reference week has been set.
+    """
+    mfg = week_dates.get(week) if week_dates else None
+    if mfg is None:
+        return f"Week {week}"
+    return f"Week {week} — {mfg:%d %b %Y}"

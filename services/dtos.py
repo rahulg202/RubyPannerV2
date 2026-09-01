@@ -68,6 +68,9 @@ class OptimizationResult:
     week_dates: list[tuple] = field(default_factory=list)  # (week, mfg_date, cal_date)
     xlsx_bytes: bytes | None = None
     warnings: list[str] = field(default_factory=list)
+    # Row-level reconciliation against the manual plan (domain.site_matching).
+    match_report: list = field(default_factory=list)
+    match_summary: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +92,12 @@ class OnboardingRequest:
     reference_week_date: date | None = None
     max_seeds: int = 10
     max_passes: int = 3
+    # "optimize" re-plans all 52 weeks for every candidate week (the default).
+    # "fixed" holds the existing plan still and prices slotting the site in.
+    mode: str = "optimize"
+    master_planner_bytes: bytes | None = None
+    master_planner_sheet: str = "Schedule"
+    max_shift_weeks: int = 4
 
 
 @dataclass
@@ -103,6 +112,13 @@ class OnboardingResult:
     infeasible_count: int = 0
     infeasible_reasons: list[str] = field(default_factory=list)
     week_dates: list[tuple] = field(default_factory=list)
+    # Fixed-plan mode results (domain.fixed_plan_onboarding.FixedPlanResult),
+    # kept separate rather than shoehorned into ``rankings`` because they answer
+    # a different question and carry different fields.
+    mode: str = "optimize"
+    fixed_rankings: list = field(default_factory=list)
+    fixed_plan_weeks: int = 0
+    warnings: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +138,11 @@ class ComparisonRequest:
     shutdown_weeks: tuple[int, ...] = ()
     partial_shutdown_weeks: tuple[int, ...] = ()
     master_planner_year: int | None = None
+    # Must match what the input file was anchored to, or per-customer weeks are
+    # offset between the two files.
+    reference_week_date: date | None = None
+    # (site_id, site_name) per active input row, for the row-level match report.
+    active_sites: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass
@@ -135,6 +156,9 @@ class ComparisonResult:
     weekly_comparison: pd.DataFrame | None = None
     assigned_ids: list = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Row-level reconciliation against the manual plan (domain.site_matching).
+    match_report: list = field(default_factory=list)
+    match_summary: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +173,9 @@ class ConversionRequest:
     master_planner_sheet: str = "Schedule"
     horizon_weeks: int = 52
     master_planner_year: int | None = None
+    # Anchors planning week 1 to a real manufacturing date. Takes precedence
+    # over master_planner_year.
+    reference_week_date: date | None = None
 
 
 @dataclass
@@ -170,3 +197,11 @@ class ConversionResult:
     implied_deliveries: int = 0
     issues_df: pd.DataFrame | None = None
     warnings: list[str] = field(default_factory=list)
+    # What planning week 1 was anchored to, and how many weeks were found.
+    anchor_date: date | None = None
+    anchor_description: str = ""
+    weeks_available: int = 0
+    # A copy of the Master Planner with generated codes written into the headers,
+    # so the codes survive header edits instead of depending on a text hash.
+    annotated_planner_bytes: bytes | None = None
+    codes_written: int = 0

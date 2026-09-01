@@ -88,7 +88,8 @@ class FakeMasterPlannerReader:
         self.raise_exc = raise_exc
         self.calls = 0
 
-    def parse(self, source, sheet="Schedule", horizon_weeks=52, year=None):
+    def parse(self, source, sheet="Schedule", horizon_weeks=52, year=None,
+              reference_week_date=None):
         self.calls += 1
         if self.raise_exc:
             raise self.raise_exc

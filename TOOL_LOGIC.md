@@ -185,7 +185,8 @@ you would get a flag rather than a corrected plan.
 **L2 — The derived cadence is lumpier than your maintained input sheet.** When the
 tool derives intervals from the Master Planner it models each site as a fixed
 repeating cycle from one start week. Your real schedule is smoothed by hand, so the
-model drifts out of phase:
+model drifts out of phase. This is inherent to modelling a cadence and is not fixed
+by anchoring the reference week:
 
 ```
 demand profile                       std dev   min   max   total
@@ -203,10 +204,23 @@ replacement for it.**
 optimizer decides weekly *totals*; a second step hands those anonymous generators to
 individual customers. Where several sites are due in the same week, which one is
 recorded as "moved" is consistent between runs but arbitrary. The totals are sound;
-do not use an individual row to challenge a specific site.
+do not use an individual row to challenge a specific site. This caveat is now stated
+on the Changed Customer Weeks panel itself.
 
-**L4 — Onboarding re-optimizes the whole plan.** It does not evaluate against your
-existing plan held fixed. A fixed-plan mode is being added at your request.
+**L4 — Onboarding answers one of two different questions, and you choose which.**
+*Re-plan all 52 weeks* re-optimizes everything for each candidate start week and
+reports the cost against a baseline of your existing sites. *Keep my plan fixed*
+leaves your weekly production untouched and prices what slotting the site in costs:
+a spare slot is free, a full week needs a third batch, otherwise the generator is
+built earlier and held. The two can disagree, and both answers are valid — the first
+assumes production can move, the second assumes it cannot.
+
+Note that fixed mode deliberately excludes the idle-capacity cost. That figure
+describes how well a plan uses the factory, and in fixed mode the plan is not up for
+revision, so charging or crediting it would answer a question nobody asked. On the
+same site, re-planning mode reported a $119,000 *saving* for week 1 (added demand
+fills idle slots) while fixed mode reported $0 added cost. Both are correct for their
+own question.
 
 **L5 — Capacity cost is mostly structural.** See §8. Roughly 98% of it is unavoidable
 arithmetic, not something the optimizer can improve.
@@ -464,8 +478,8 @@ it used on the `Model_Params` sheet.
 | Test discard per batch | 1 | ≥ 0 | QC units per batch. Raising it cuts sellable output per batch |
 | Normal max batches/week | 2 | ≥ 0 | Sets the 30/week baseline and the idle-slot reference |
 | Overtime max batches/week | 3 | ≥ 0 | Sets the 45/week ceiling |
-| Shutdown weeks | empty | e.g. `1,2,26` | No production. Forces pre-building; raises penalty |
-| Partial shutdown weeks | empty | e.g. `30` | One batch only (15) |
+| Shutdown weeks | none | pick any weeks | No production. Forces pre-building; raises penalty. Picker shows each week's date |
+| Partial shutdown weeks | none | pick any weeks | One batch only (15) |
 
 ### 9.3 Costs and weights
 
@@ -500,8 +514,8 @@ it used on the `Model_Params` sheet.
 | BWXT quarterly quota (mCi) | 10,000 | ≥ 0 | **Placeholder — needs confirmation** |
 | Quota shortfall penalty ($/mCi) | 50,000 | ≥ 0 | **Placeholder — deliberately punitive** |
 | Quarter start month | 1 | 1–12 | Which month quarter 1 begins |
-| Curium unavailable weeks | empty | e.g. `14,15` | Weeks Curium cannot supply. Infeasible if EU demand falls there |
-| BWXT unavailable weeks | empty | e.g. `20` | Weeks BWXT cannot supply |
+| Curium unavailable weeks | none | pick any weeks | Weeks Curium cannot supply. Infeasible if EU demand falls there |
+| BWXT unavailable weeks | none | pick any weeks | Weeks BWXT cannot supply |
 
 ### 9.6 Internal parameters (not user-facing)
 
@@ -580,11 +594,11 @@ app until it says built.
 | Item | Status |
 |---|---|
 | Curium, BWXT, BWXT allocation | **Built and verified** against your workbook |
-| Site codes written into a copy of the Master Planner | Accepted, not yet built |
-| Reference week on Import Manual Plan and Comparison | Accepted, not yet built |
-| Onboarding against a fixed existing plan | Accepted, not yet built |
-| Row-level error messages in Comparison | Accepted, not yet built |
-| Changed Customer Weeks display fixes | Accepted, not yet built |
+| Site codes written into a copy of the Master Planner | **Built and verified** |
+| Reference week on Import Manual Plan and Comparison | **Built and verified** |
+| Onboarding against a fixed existing plan | **Built and verified** |
+| Row-level error messages in Comparison | **Built and verified** |
+| Changed Customer Weeks display fixes | **Built and verified** |
 
 Two of your five points from that round were **questions rather than defects**, and
 those are answered in this document rather than in code:
@@ -601,7 +615,6 @@ Not started, no committed dates:
 
 | Item | Driver |
 |---|---|
-| Replace week-number inputs with week-start dates throughout | Your suggestion — see §12 |
 | Raw material procurement planner | Previously discussed as a separate phase |
 | Confirmed quota and shortfall figures replacing placeholders | Blocked on A12/A13 |
 | Carrying inventory across the horizon boundary | Depends on §3.1 confirmation |
@@ -668,11 +681,38 @@ ambiguous today.
 
 Two things worth setting out about how far it can go.
 
-**Where it works cleanly.** Anything anchored to the reference week can be shown and
-entered as a week-start date: shutdown weeks, partial shutdown weeks, supplier
-unavailable weeks, onboarding windows, and every week column in every output. The
-tool already converts week numbers to dates internally for display; this extends the
-same anchor to the inputs.
+**Done.** Every week-number input is now a picker showing the real date, and the
+onboarding window is entered as dates. Details below.
+
+**The foundation.** The reference week set in Settings anchors
+planning week 1 to a real manufacturing date, and both the Master Planner import and
+the Comparison read from that week forward — crossing the calendar-year boundary,
+which reading by year could never do. Anchoring had to land in both places at once:
+anchoring only the import while the comparison still numbered weeks by calendar year
+would have reported **1,186 false per-customer changes instead of 60 real ones** on
+your 2026 data.
+
+**What changed.** Shutdown weeks, partial shutdown weeks and supplier unavailable
+weeks were free-text boxes taking `1,2,26`. They are now pickers listing every week
+in the horizon, each labelled `Week 26 — 29 Jun 2026`. The onboarding window, which
+took two integers, is now two date fields.
+
+One deliberate choice: shutdown weeks are a **set** of weeks, not a range, so they
+get a date-labelled picker rather than a date field. A date range would have
+misrepresented the setting. Where a value genuinely is a single point in time — the
+onboarding window — it is a date field.
+
+**Where a week number still exists underneath.** The Master Planner is week-numbered
+and the solver works in week indices, so dates are the interface while an index
+remains the internal key. In practice that means a date you enter is snapped to the
+planning week containing it, and the screen tells you which week that was rather than
+rounding silently. Dates outside the horizon are clamped to its first or last week
+rather than being dropped.
+
+**If no reference week is set** the pickers still work, labelled with bare week
+numbers, and the onboarding window stays numeric — with a prompt explaining that
+setting a reference week turns both into dates. Sessions saved before this change,
+holding values like `"1,2,26"`, are migrated on load.
 
 **Where a week number has to survive underneath.** The Master Planner itself is
 week-numbered, and the optimizer works in week indices. So dates become the interface

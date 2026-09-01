@@ -78,6 +78,7 @@ class MasterPlannerReaderPort(Protocol):
         sheet: str = "Schedule",
         horizon_weeks: int = 52,
         year: int | None = None,
+        reference_week_date: Any = None,
     ) -> Any:
         ...
 
@@ -97,10 +98,29 @@ class MasterPlannerConverterPort(Protocol):
         sheet: str = "Schedule",
         horizon_weeks: int = 52,
         year: int | None = None,
+        reference_week_date: Any = None,
     ) -> Any:
         ...
 
     def write(self, result: Any) -> bytes:
+        ...
+
+
+@runtime_checkable
+class MasterPlannerAnnotatorPort(Protocol):
+    """Writes derived site codes into a copy of the Master Planner.
+
+    Implemented by
+    ``io_adapters.master_planner_annotator.MasterPlannerAnnotator``. Returns an
+    ``AnnotationResult`` carrying the new workbook bytes and what was written.
+    """
+
+    def annotate(
+        self,
+        source: bytes,
+        sites: list[Any],
+        sheet: str = "Schedule",
+    ) -> Any:
         ...
 
 

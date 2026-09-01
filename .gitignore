@@ -57,3 +57,7 @@ rubyfill/
 # synthetic equivalent (see tests/fixtures.py), so no real data is needed to run it.
 sites_clean.csv
 **/sites_clean.csv
+
+# Generated documentation artefact, rebuilt from USER_GUIDE.md as needed.
+USER_GUIDE.pdf
+*.pdf

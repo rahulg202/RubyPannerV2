@@ -13,6 +13,7 @@ import streamlit as st
 
 from domain.errors import ValidationError
 from io_adapters.input_file_writer import InputFileWriter
+from io_adapters.master_planner_annotator import MasterPlannerAnnotator
 from io_adapters.master_planner_converter import MasterPlannerConverter
 from io_adapters.master_planner_parser import MasterPlannerParser
 from io_adapters.sites_reader import ExcelSitesReader
@@ -49,9 +50,13 @@ def build_services() -> tuple[
         OnboardingService(
             sites_reader=sites_reader,
             input_file_writer=InputFileWriter(),
+            master_planner_reader=master_planner,
         ),
         ComparisonService(master_planner_reader=master_planner),
-        ConversionService(converter=MasterPlannerConverter()),
+        ConversionService(
+            converter=MasterPlannerConverter(),
+            annotator=MasterPlannerAnnotator(),
+        ),
     )
 
 

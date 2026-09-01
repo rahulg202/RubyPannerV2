@@ -12,8 +12,17 @@ from typing import Callable, Sequence
 from domain.dates import derive_week_dates
 from domain.demand import clean_sites
 from domain.onboarding import NewCustomer, estimate_search, evaluate_multi_customer
+from domain.errors import ValidationError
+from domain.fixed_plan_onboarding import recommend_against_fixed_plan
 from services.dtos import OnboardingRequest, OnboardingResult
-from services.ports import InputFileWriterPort, SitesReaderPort
+from services.ports import (
+    InputFileWriterPort,
+    MasterPlannerReaderPort,
+    SitesReaderPort,
+)
+
+MODE_OPTIMIZE = "optimize"
+MODE_FIXED = "fixed"
 
 ProgressCallback = Callable[[float, str], None]
 
@@ -25,9 +34,11 @@ class OnboardingService:
         self,
         sites_reader: SitesReaderPort,
         input_file_writer: InputFileWriterPort | None = None,
+        master_planner_reader: MasterPlannerReaderPort | None = None,
     ) -> None:
         self._sites_reader = sites_reader
         self._writer = input_file_writer
+        self._master_planner_reader = master_planner_reader
 
     # ------------------------------------------------------------------
 
@@ -49,6 +60,9 @@ class OnboardingService:
         ValueError
             If the sites file is missing required columns (from the reader).
         """
+        if request.mode == MODE_FIXED:
+            return self._run_against_fixed_plan(request, progress)
+
         is_csv = str(request.filename).lower().endswith(".csv")
         raw_df = self._sites_reader.read(request.file_bytes, request.sheet, is_csv=is_csv)
         active_df, _issues = clean_sites(raw_df, request.params)
@@ -81,6 +95,80 @@ class OnboardingService:
             infeasible_count=outcome["infeasible_count"],
             infeasible_reasons=outcome["infeasible_reasons"],
             week_dates=week_dates,
+            mode=MODE_OPTIMIZE,
+        )
+
+    # ------------------------------------------------------------------
+
+    def _run_against_fixed_plan(
+        self,
+        request: OnboardingRequest,
+        progress: ProgressCallback | None = None,
+    ) -> OnboardingResult:
+        """Rank start weeks against the manual plan, held fixed.
+
+        Raises
+        ------
+        ValidationError
+            If no Master Planner was supplied, or a customer row is invalid.
+        """
+        if self._master_planner_reader is None:
+            raise ValidationError(
+                "Onboarding against an existing plan needs a Master Planner "
+                "reader; none was configured."
+            )
+        if not request.master_planner_bytes:
+            raise ValidationError(
+                "Upload the Master Planner workbook to onboard against your "
+                "existing plan."
+            )
+
+        manual = self._master_planner_reader.parse(
+            request.master_planner_bytes,
+            request.master_planner_sheet,
+            request.params.horizon_weeks,
+            None,
+            request.reference_week_date,
+        )
+        warnings = list(manual.issues)
+
+        # Sellable output only. The weekly ceilings are expressed in sellable
+        # generators, and QC generators are the discarded ones — including them
+        # would overstate how full each week is.
+        fixed_production = manual.weekly_commercial
+        weeks_with_plan = sum(1 for v in fixed_production[1:] if v)
+        if not weeks_with_plan:
+            raise ValidationError(
+                "The Master Planner has no weekly production in the selected "
+                "window, so there is no existing plan to onboard into."
+            )
+
+        outcome = recommend_against_fixed_plan(
+            fixed_production,
+            list(request.new_customers),
+            request.params,
+            request.max_shift_weeks,
+            progress=progress,
+        )
+
+        week_dates: list[tuple] = []
+        if request.reference_week_date is not None:
+            week_dates = derive_week_dates(
+                request.reference_week_date, 4, request.params.horizon_weeks
+            )
+
+        return OnboardingResult(
+            base_summary={},
+            used_heuristic=outcome["used_heuristic"],
+            combinations_evaluated=outcome["combinations_evaluated"],
+            search_space=outcome["search_space"],
+            infeasible_count=outcome["infeasible_count"],
+            infeasible_reasons=outcome["infeasible_reasons"],
+            week_dates=week_dates,
+            mode=MODE_FIXED,
+            fixed_rankings=outcome["rankings"],
+            fixed_plan_weeks=weeks_with_plan,
+            warnings=warnings,
         )
 
     # ------------------------------------------------------------------
