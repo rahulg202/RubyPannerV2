@@ -125,8 +125,14 @@ def validate_new_customers(
                 f"{label}: latest start week ({c.latest_week}) exceeds the "
                 f"horizon ({params.horizon_weeks})."
             )
-        if c.interval_weeks < 1:
-            errors.append(f"{label}: interval weeks must be >= 1.")
+        # 0 means a single delivery with no repeat, which the demand builders
+        # already model (see inject_customer_demand and domain.demand). Rejecting
+        # it here made one-time-delivery customers impossible to onboard.
+        if c.interval_weeks < 0:
+            errors.append(
+                f"{label}: interval weeks cannot be negative. Use 0 for a "
+                f"one-time delivery."
+            )
     return errors
 
 
