@@ -25,6 +25,8 @@ from typing import Any
 
 import openpyxl
 
+from domain.week_anchor import AnchoredWindow, DatedRow, anchor_window
+
 HEADER_ROW = 2
 
 # Aggregate / non-customer headers that must never be treated as customers.
@@ -42,6 +44,11 @@ NON_CUSTOMER_FRAGMENTS = (
 )
 
 _LEADING_NUM = re.compile(r"^(\d+)")
+
+# A generated code already written into the header by the annotator. Kept in sync
+# with ``domain.site_derivation._LEADING_GENERATED``; matched here so an annotated
+# workbook yields the same identifier the converter assigned.
+_LEADING_GENERATED = re.compile(r"^\s*(RF-[0-9a-fA-F]{6,})")
 
 
 @dataclass
@@ -62,6 +69,9 @@ class MasterPlannerData:
     weekly_commercial: list[int] = field(default_factory=list)
     weekly_qc: list[int] = field(default_factory=list)
     customer_schedule: dict[str, list[int]] = field(default_factory=dict)
+    # site_id -> the column header it came from, so a failed match can name the
+    # column and suggest the likely counterpart instead of just reporting a count.
+    customer_headers: dict[str, str] = field(default_factory=dict)
     assigned_ids: list[AssignedId] = field(default_factory=list)
     ignored_columns: list[str] = field(default_factory=list)
     week_to_row: dict[int, int] = field(default_factory=dict)
@@ -69,6 +79,9 @@ class MasterPlannerData:
     cal_dates: list[Any] = field(default_factory=list)   # 1-indexed, date | None
     issues: list[str] = field(default_factory=list)
     rows_excluded: int = 0
+    # Manufacturing date planning week 1 was anchored to, when a reference week
+    # was supplied. None means the sheet's own week numbering was used.
+    anchor_date: Any = None
 
 
 def _normalize(text: str) -> str:
@@ -151,6 +164,7 @@ class MasterPlannerParser:
         sheet: str = "Schedule",
         horizon_weeks: int = 52,
         year: int | None = None,
+        reference_week_date: date | None = None,
     ) -> MasterPlannerData:
         """Parse the Schedule sheet into a :class:`MasterPlannerData`.
 
@@ -165,7 +179,15 @@ class MasterPlannerParser:
         year : int | None
             Which calendar year of rows to use. Week numbers repeat across years
             in this workbook. When ``None``, the most recent year present that
-            has non-zero commercial demand is chosen.
+            has non-zero commercial demand is chosen. Ignored when
+            ``reference_week_date`` is supplied.
+        reference_week_date : date | None
+            Manufacturing date that planning week 1 should start from. When
+            supplied, planning weeks are counted forward from the row holding
+            that date, crossing calendar-year boundaries, and the sheet's own
+            ``Weeks #`` values are not used as planning weeks. This must match
+            how the converter anchors, or per-customer weeks would be offset
+            between the input file and this comparison.
         """
         wb = openpyxl.load_workbook(io.BytesIO(source), data_only=True, read_only=True)
         try:
@@ -195,8 +217,14 @@ class MasterPlannerParser:
                     data.ignored_columns.append(str(raw_header).strip())
                 continue
             text = str(raw_header).strip()
+            explicit = _LEADING_GENERATED.match(text)
             match = _LEADING_NUM.match(text)
-            if match:
+            if explicit:
+                # A code already written into the header is authoritative. Reading
+                # it literally is the whole point of annotating the workbook: the
+                # code then survives edits to the surrounding header text.
+                site_id = explicit.group(1)
+            elif match:
                 site_id = match.group(1)
             else:
                 site_id = assign_stable_id(text)
@@ -209,10 +237,35 @@ class MasterPlannerParser:
                     )
                 )
             customer_cols[idx] = site_id
+            data.customer_headers.setdefault(site_id, text)
 
         # Choose the year window
         body = rows[HEADER_ROW:]
-        target_year = year if year is not None else self._pick_year(body, col_index)
+        # Two ways to map sheet rows onto planning weeks. Anchoring to a
+        # reference week takes precedence: it is explicit, it crosses calendar
+        # years, and it is what the converter uses.
+        anchored: AnchoredWindow | None = None
+        week_by_offset: dict[int, int] = {}
+        target_year: int | None = None
+
+        if reference_week_date is not None and col_index.get("mfg") is not None:
+            mfg_col = col_index["mfg"]
+            dated = [
+                DatedRow(position=offset, mfg_date=_to_date(row[mfg_col]))
+                for offset, row in enumerate(body)
+                if mfg_col < len(row) and _to_date(row[mfg_col]) is not None
+            ]
+            anchored = anchor_window(dated, reference_week_date, horizon_weeks)
+            data.issues.extend(anchored.warnings)
+            if anchored.resolved:
+                week_by_offset = {pos: week for week, pos in anchored.weeks}
+                data.anchor_date = anchored.anchor_date
+            else:
+                # Could not anchor; fall back rather than return nothing.
+                anchored = None
+
+        if anchored is None:
+            target_year = year if year is not None else self._pick_year(body, col_index)
 
         # Initialize 1-indexed arrays
         T = horizon_weeks
@@ -228,16 +281,23 @@ class MasterPlannerParser:
         seen_weeks: set[int] = set()
 
         for offset, row in enumerate(body):
-            if wk_col >= len(row):
-                continue
-            week_val, ok = _to_int(row[wk_col])
-            if not ok or week_val == 0:
-                continue
-
             mfg = _to_date(row[col_index["mfg"]]) if col_index.get("mfg") is not None else None
-            if target_year is not None:
-                if mfg is None or mfg.year != target_year:
+
+            if week_by_offset:
+                # Anchored: the planning week comes from the reference window, so
+                # the sheet's own week numbering is irrelevant here.
+                week_val = week_by_offset.get(offset)
+                if week_val is None:
                     continue
+            else:
+                if wk_col >= len(row):
+                    continue
+                week_val, ok = _to_int(row[wk_col])
+                if not ok or week_val == 0:
+                    continue
+                if target_year is not None:
+                    if mfg is None or mfg.year != target_year:
+                        continue
 
             if not (1 <= week_val <= T):
                 data.rows_excluded += 1
@@ -350,6 +410,9 @@ def parse_master_planner(
     sheet: str = "Schedule",
     horizon_weeks: int = 52,
     year: int | None = None,
+    reference_week_date: date | None = None,
 ) -> MasterPlannerData:
     """Module-level convenience wrapper around :class:`MasterPlannerParser`."""
-    return MasterPlannerParser().parse(source, sheet, horizon_weeks, year)
+    return MasterPlannerParser().parse(
+        source, sheet, horizon_weeks, year, reference_week_date
+    )

@@ -151,3 +151,43 @@ def test_parser_class_and_function_agree(fixture_bytes):
     b = parse_master_planner(fixture_bytes, "Schedule", 52, None)
     assert a.weekly_planned_production == b.weekly_planned_production
     assert a.customer_schedule == b.customer_schedule
+
+
+# ---------------------------------------------------------------------------
+# Codes already written into a header (annotated workbooks)
+# ---------------------------------------------------------------------------
+
+def test_explicit_generated_code_in_a_header_is_used_verbatim():
+    """An annotated workbook must yield the code in the header, not a fresh hash.
+
+    Regression: the parser looked only for leading digits, so a header starting
+    'RF-...' fell through to hashing the header text. Annotating a workbook then
+    produced codes that differed from the ones written into it.
+    """
+    import io as _io
+    from datetime import datetime
+
+    import openpyxl as _openpyxl
+
+    header = "RF-4e40dfd2  Apex Cardiology, Jackson, TN (7 weeks)"
+    wb = _openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Schedule"
+    ws.append([None] * 12)
+    ws.append([
+        "Weeks #", "MFG Date", "Calibration date", "Problem?", "Month", "FY",
+        "US Demand", "RoW Demand", "Total Commercial", "QC GEN", "US STAB",
+        header,
+    ])
+    ws.append([1, datetime(2026, 1, 5), datetime(2026, 1, 9), None, "Jan", 2026,
+               1, 0, 1, 1, None, 1])
+    buffer = _io.BytesIO()
+    wb.save(buffer)
+
+    parsed = parse_master_planner(buffer.getvalue(), horizon_weeks=5)
+
+    assert "RF-4e40dfd2" in parsed.customer_schedule
+    assert parsed.customer_schedule["RF-4e40dfd2"][1] == 1
+    # It is an explicit identifier, so it is not reported as newly assigned.
+    assert not any(a.generated_id == "RF-4e40dfd2" for a in parsed.assigned_ids)
+    assert parsed.customer_headers["RF-4e40dfd2"] == header

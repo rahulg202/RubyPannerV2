@@ -123,6 +123,30 @@ def test_secondary_code_must_start_with_a_digit():
     assert name.startswith("MIS Colorado Springs")
 
 
+def test_generated_code_already_in_the_header_is_read_literally():
+    """The point of annotating the workbook: the code must not be re-derived.
+
+    Regression. Writing 'RF-...' into a header used to leave no leading digits,
+    so the code was re-hashed from the now-longer header text and came out
+    different — the annotation silently broke the match it was meant to fix.
+    """
+    account, name = split_account_and_name(
+        "RF-4e40dfd2  Apex Cardiology, Jackson, TN (7 weeks)"
+    )
+    assert account == "RF-4e40dfd2"
+    assert name == "Apex Cardiology, Jackson, TN (7 weeks)"
+
+
+def test_derived_site_keeps_a_code_already_present_in_the_header():
+    site = derive_site(
+        PlannerColumn("RF-abcd1234  Alpha Clinic, TX (7)", marks=(1, 8)),
+        "RF-should-not-be-used",
+    )
+    assert site.site_code == "RF-abcd1234"
+    assert site.code_source == "account number"   # explicit, not generated
+    assert not any("No account number" in n for n in site.notes)
+
+
 def test_unnumbered_header_has_no_account():
     account, name = split_account_and_name("Alpha Cardiology, Jackson, TN (7 weeks)")
     assert account is None

@@ -95,6 +95,25 @@ import pytest
 
 from tests.fixtures import write_sites_csv
 
+# ---------------------------------------------------------------------------
+# Hypothesis: no per-example deadline
+# ---------------------------------------------------------------------------
+# Several property tests run the full DP solver. A single 52-week solve takes
+# 220-300ms at higher demand levels, which exceeds Hypothesis's default 200ms
+# per-example deadline — so those tests passed or failed depending on machine
+# load. The deadline exists to catch accidentally pathological slowness in fast
+# unit tests; here the cost is deliberate and exhaustive. Timing belongs in a
+# dedicated performance test, not smuggled into a correctness property.
+
+from hypothesis import HealthCheck, settings as hypothesis_settings
+
+hypothesis_settings.register_profile(
+    "rubyfill",
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+hypothesis_settings.load_profile("rubyfill")
+
 
 @pytest.fixture(scope="session")
 def sites_csv(tmp_path_factory) -> str:

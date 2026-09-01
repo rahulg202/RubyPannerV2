@@ -53,6 +53,13 @@ _HEADER_INTERVAL = re.compile(r"\(\s*(\d{1,2})\s*(?:weeks?|wks?)?\s*\)", re.IGNO
 # Leading account number, e.g. "00449 ..." or "00631/0105MAK ...".
 _LEADING_ACCOUNT = re.compile(r"^\s*(\d+)")
 
+# A generated code already written into the header, e.g. "RF-4e40dfd2  Apex ...".
+# Recognised so that annotating the Master Planner makes the code *stable*: once
+# it is in the header it must be read literally, never re-derived from the header
+# text. Without this the annotation would change the very code it wrote.
+GENERATED_CODE_PREFIX = "RF-"
+_LEADING_GENERATED = re.compile(r"^\s*(RF-[0-9a-fA-F]{6,})")
+
 # Placeholder headers the planning team uses for not-yet-named columns.
 _PLACEHOLDER = re.compile(r"^[\s?\-_.]*$")
 
@@ -152,8 +159,18 @@ def split_account_and_name(header: str) -> tuple[str | None, str]:
     ``"00631/0105MAK    CII Chandler 2, Chandler, AZ (7)"`` yields
     ``("00631", "CII Chandler 2, Chandler, AZ (7)")``. Leading zeros are kept:
     they are part of the account code.
+
+    A previously-written generated code takes precedence, so
+    ``"RF-4e40dfd2  Apex Cardiology, TN (7)"`` yields
+    ``("RF-4e40dfd2", "Apex Cardiology, TN (7)")`` rather than being hashed again.
     """
     text = str(header).strip()
+
+    generated = _LEADING_GENERATED.match(text)
+    if generated:
+        code = generated.group(1)
+        return code, text[generated.end():].strip() or text
+
     match = _LEADING_ACCOUNT.match(text)
     if not match:
         return None, text
