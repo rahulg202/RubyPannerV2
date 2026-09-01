@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
+from datetime import date
 
 import openpyxl
 import pandas as pd
 from openpyxl.utils import get_column_letter
 
+from domain.week_anchor import DatedRow, anchor_window, describe_anchor
 from domain.site_derivation import (
     DerivedSite,
     PlannerColumn,
@@ -44,6 +46,7 @@ from io_adapters.master_planner_parser import (
     MasterPlannerParser,
     _is_customer_column,
     _is_schedule_mark,
+    _to_date,
     _to_int,
     assign_stable_id,
 )
@@ -66,6 +69,10 @@ class DerivedSiteSet:
     year: int | None = None
     horizon_weeks: int = 52
     ignored_columns: list[str] = field(default_factory=list)
+    # Set when a reference week anchored planning week 1 to a real date.
+    anchor_date: date | None = None
+    weeks_available: int = 0
+    anchor_description: str = ""
 
     @property
     def active_sites(self) -> list[DerivedSite]:
@@ -109,6 +116,7 @@ class MasterPlannerConverter:
         sheet: str = "Schedule",
         horizon_weeks: int = 52,
         year: int | None = None,
+        reference_week_date: date | None = None,
     ) -> DerivedSiteSet:
         """Derive one site per customer column.
 
@@ -150,24 +158,40 @@ class MasterPlannerConverter:
         col_index = MasterPlannerParser._locate_columns(header_values)
         reserved = set(col_index.values())
 
-        target_year = (
-            year if year is not None
-            else MasterPlannerParser._pick_year(body, col_index)
-        )
-        rows = self._year_rows(body, col_index, target_year, horizon_weeks)
+        # Anchoring to a reference week takes precedence over picking a calendar
+        # year: it states where week 1 is, and it crosses the year boundary.
+        anchored = None
+        target_year = None
+        extra_warnings: list[str] = []
+
+        if reference_week_date is not None and col_index.get("mfg") is not None:
+            anchored = self._anchor(body, col_index, reference_week_date, horizon_weeks)
+            extra_warnings.extend(anchored.warnings)
+            if not anchored.resolved:
+                anchored = None
+
+        if anchored is not None:
+            rows = [(week, body[pos]) for week, pos in anchored.weeks]
+        else:
+            target_year = (
+                year if year is not None
+                else MasterPlannerParser._pick_year(body, col_index)
+            )
+            rows = self._year_rows(body, col_index, target_year, horizon_weeks)
 
         columns, ignored = self._customer_columns(header_cells, reserved, rows)
         sites, warnings = derive_sites(columns, assign_stable_id, horizon_weeks)
+        warnings.extend(extra_warnings)
 
-        if target_year is None:
+        if anchored is None and target_year is None:
             warnings.append(
                 "Could not determine which year to read from the manufacturing "
                 "dates; all dated rows were used."
             )
         if not rows:
             warnings.append(
-                "No schedule rows were found for the selected year, so every "
-                "site came out inactive. Check the sheet and year."
+                "No schedule rows were found, so every site came out inactive. "
+                "Check the sheet, the reference week and the year."
             )
 
         return DerivedSiteSet(
@@ -176,7 +200,32 @@ class MasterPlannerConverter:
             year=target_year,
             horizon_weeks=horizon_weeks,
             ignored_columns=ignored,
+            anchor_date=anchored.anchor_date if anchored else None,
+            weeks_available=anchored.rows_available if anchored else len(rows),
+            anchor_description=(
+                describe_anchor(anchored, horizon_weeks) if anchored else ""
+            ),
         )
+
+    @staticmethod
+    def _anchor(
+        body: list[tuple],
+        col_index: dict[str, int],
+        reference_week_date: date,
+        horizon_weeks: int,
+    ):
+        """Resolve the horizon window against the reference week.
+
+        Uses the same pure anchoring as the Master Planner reader, so the input
+        file and the comparison agree on what planning week 1 is.
+        """
+        mfg_col = col_index["mfg"]
+        dated = [
+            DatedRow(position=offset, mfg_date=_to_date(row[mfg_col]))
+            for offset, row in enumerate(body)
+            if mfg_col < len(row) and _to_date(row[mfg_col]) is not None
+        ]
+        return anchor_window(dated, reference_week_date, horizon_weeks)
 
     # ------------------------------------------------------------------
     # Extraction helpers
@@ -282,6 +331,9 @@ def convert_master_planner(
     sheet: str = "Schedule",
     horizon_weeks: int = 52,
     year: int | None = None,
+    reference_week_date: date | None = None,
 ) -> DerivedSiteSet:
     """Module-level convenience wrapper around :class:`MasterPlannerConverter`."""
-    return MasterPlannerConverter().convert(source, sheet, horizon_weeks, year)
+    return MasterPlannerConverter().convert(
+        source, sheet, horizon_weeks, year, reference_week_date
+    )

@@ -278,3 +278,123 @@ def test_written_workbook_reads_back_through_the_sites_reader(derived):
     assert len(df) == len(derived.sites)
     # Leading zeros must survive the round-trip or per-customer matching breaks.
     assert "00449" in set(df["site_id"])
+
+
+# ---------------------------------------------------------------------------
+# Reference-week anchoring
+# ---------------------------------------------------------------------------
+
+def _multi_year_workbook() -> bytes:
+    """80 weekly rows spanning 2026 into 2027, so a window can cross the boundary.
+
+    Week numbers restart at 1 each January, mirroring the real workbook — which is
+    exactly why anchoring by date rather than by week number is needed.
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Schedule"
+    ws.append([None] * (len(AGGREGATE_HEADERS) + 1))
+    ws.append(AGGREGATE_HEADERS + ["00449    Alpha Care, CA (7)"])
+
+    monday = datetime(2026, 1, 5)
+    for i in range(80):
+        mfg = datetime.fromordinal(monday.toordinal() + 7 * i)
+        # Week number restarts each January, as in the real sheet.
+        week = ((mfg - datetime(mfg.year, 1, 1)).days // 7) + 1
+        mark = 1 if i % 7 == 0 else None
+        ws.append([
+            week, mfg, datetime.fromordinal(mfg.toordinal() + 4), None,
+            mfg.strftime("%b"), mfg.year, 0, 0, 1 if mark else 0, 1, None, mark,
+        ])
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def test_reference_week_becomes_planning_week_one():
+    from datetime import date
+
+    data = _multi_year_workbook()
+    derived = MasterPlannerConverter().convert(
+        data, horizon_weeks=30, reference_week_date=date(2026, 7, 27)
+    )
+    assert derived.anchor_date == date(2026, 7, 27)
+    assert derived.weeks_available == 30
+    assert "27 Jul 2026" in derived.anchor_description
+
+
+def test_anchored_window_crosses_the_calendar_year_boundary():
+    """Reading by year could never produce this window."""
+    from datetime import date, timedelta
+
+    data = _multi_year_workbook()
+    derived = MasterPlannerConverter().convert(
+        data, horizon_weeks=40, reference_week_date=date(2026, 7, 27)
+    )
+    assert derived.weeks_available == 40
+    # Week 40 lands well inside 2027.
+    assert (date(2026, 7, 27) + timedelta(days=7 * 39)).year == 2027
+    assert derived.active_sites
+
+
+def test_reference_week_takes_precedence_over_the_year():
+    from datetime import date
+
+    data = _multi_year_workbook()
+    derived = MasterPlannerConverter().convert(
+        data, horizon_weeks=20, year=2027, reference_week_date=date(2026, 7, 27)
+    )
+    assert derived.anchor_date == date(2026, 7, 27)
+    assert derived.year is None          # year selection was not used
+
+
+def test_mid_week_reference_snaps_and_warns():
+    from datetime import date
+
+    data = _multi_year_workbook()
+    derived = MasterPlannerConverter().convert(
+        data, horizon_weeks=10, reference_week_date=date(2026, 7, 29)
+    )
+    assert derived.anchor_date == date(2026, 7, 27)
+
+
+def test_reference_after_the_last_row_falls_back_to_year_reading():
+    from datetime import date
+
+    data = _multi_year_workbook()
+    derived = MasterPlannerConverter().convert(
+        data, horizon_weeks=10, reference_week_date=date(2030, 1, 7)
+    )
+    assert derived.anchor_date is None          # anchoring failed
+    assert derived.year is not None             # fell back rather than returning nothing
+    assert any("falls after the last week" in w for w in derived.warnings)
+
+
+def test_converter_and_parser_agree_on_planning_weeks():
+    """The property that makes the comparison meaningful.
+
+    If the input file were anchored to a mid-year reference week while the
+    Master Planner reader still numbered weeks by calendar year, every
+    per-customer week would be offset and the tool would report changes that
+    never happened.
+    """
+    from datetime import date
+
+    from io_adapters.master_planner_parser import parse_master_planner
+
+    data = _multi_year_workbook()
+    ref = date(2026, 7, 27)
+
+    derived = MasterPlannerConverter().convert(
+        data, horizon_weeks=30, reference_week_date=ref
+    )
+    parsed = parse_master_planner(data, horizon_weeks=30, reference_week_date=ref)
+
+    assert derived.anchor_date == parsed.anchor_date == ref
+    assert parsed.mfg_dates[1] == ref
+
+    # The site's first scheduled week must be the same number on both sides.
+    site = next(s for s in derived.sites if s.site_code == "00449")
+    marks = [w for w, v in enumerate(parsed.customer_schedule["00449"]) if w and v]
+    assert marks, "fixture should schedule this site inside the window"
+    assert site.next_demand_week == marks[0]
