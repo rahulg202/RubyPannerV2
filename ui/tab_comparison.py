@@ -25,6 +25,56 @@ from ui.formatting import (
 )
 
 
+def _render_unreconciled_baseline(result) -> None:
+    """Totals disagree, so no cost is shown at all.
+
+    Deliberately publishes no dollar figure. Any unreconciled unit sits in backlog
+    for the remainder of the horizon at ``late_penalty_rate``, which is 100x the
+    holding rate and exists to stop the solver choosing backlog -- it prices
+    nothing real. On the reference workbook a 30-unit gap produced a $1.03bn
+    "cost", which is an artefact of that multiplier and not a number to show a
+    planner, let alone put in front of management.
+    """
+    b = result.baseline
+    manual = b.total_planned if b else 0
+    demand = b.total_demand if b else 0
+    gap = manual - demand
+
+    st.error(
+        f"**The manual plan and the demand model do not describe the same total, "
+        f"so no cost comparison is shown.** The plan produces {manual:,} "
+        f"generators over the horizon while demand totals {demand:,} — a gap of "
+        f"{gap:+,}."
+    )
+
+    cols = st.columns(3)
+    cols[0].metric("Manual plan", f"{manual:,}")
+    cols[1].metric("Demand model", f"{demand:,}")
+    cols[2].metric("Gap", f"{gap:+,}")
+
+    st.markdown(
+        "**Why this usually happens.** Demand is modelled as each site repeating a "
+        "fixed interval from its first delivery. Your Master Planner is smoothed by "
+        "hand and is not perfectly regular, so over a given 52-week window the two "
+        "totals need not agree. Changing the reference week moves the window and "
+        "changes the gap."
+    )
+    st.markdown(
+        "**Why no cost is shown.** A missing generator is treated as a late "
+        "delivery, and late delivery is priced at 100 times the cost of holding "
+        "stock early. That rate exists to stop the optimizer ever choosing to run "
+        "late; it is not a price anyone pays. Applied to a whole-horizon gap it "
+        "produces figures in the hundreds of millions that mean nothing, so the "
+        "cost is withheld rather than shown with a caveat."
+    )
+    st.info(
+        "**To get a comparison:** clear the reference week and let the tool pick "
+        "the year that reconciles, or try a reference week whose window does "
+        "reconcile. The week-by-week table below shows where the plan and the "
+        "demand model diverge."
+    )
+
+
 def _render_infeasible_baseline(result, total) -> None:
     """Explain why the two costs are not comparable, instead of showing a saving.
 
@@ -138,7 +188,9 @@ def _render_result(result) -> None:
     )
     penalty = next((c for c in result.components if c["Component"] == "Penalty"), None)
 
-    if not result.baseline_is_comparable:
+    if not result.baseline_totals_reconcile:
+        _render_unreconciled_baseline(result)
+    elif not result.baseline_is_comparable:
         _render_infeasible_baseline(result, total)
     elif total and penalty:
         cols = st.columns(3)
@@ -150,14 +202,20 @@ def _render_result(result) -> None:
             help="Optimized versus manual plan.",
         )
 
-    st.dataframe(
-        comparison_frame(result.components), width="stretch", hide_index=True
-    )
-    st.caption(
-        "Penalty and overtime are where the optimizer earns its keep. The capacity "
-        "component is largely a fixed floor set by demand versus factory capacity, "
-        "so it moves little between plans and can even worsen slightly."
-    )
+    # The cost table is withheld when the totals do not reconcile: every figure in
+    # the baseline column carries the late-delivery deterrent rate and would be
+    # read as money. The week-by-week table and the site report below stay, since
+    # they are what a planner needs to find the discrepancy.
+    if result.baseline_totals_reconcile:
+        st.dataframe(
+            comparison_frame(result.components), width="stretch", hide_index=True
+        )
+        st.caption(
+            "Penalty and overtime are where the optimizer earns its keep. The "
+            "capacity component is largely a fixed floor set by demand versus "
+            "factory capacity, so it moves little between plans and can even "
+            "worsen slightly."
+        )
 
     dates = week_date_map(result.week_dates)
 

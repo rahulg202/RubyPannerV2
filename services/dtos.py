@@ -170,6 +170,10 @@ class ComparisonResult:
     # difference is not a saving the optimizer earned -- it is what the manual
     # plan avoided paying by being unexecutable. The UI must say so.
     baseline_infeasibilities: list[str] = field(default_factory=list)
+    # False when the manual plan's total differs from total demand. The baseline
+    # cost is then meaningless rather than merely optimistic, because the shortfall
+    # is charged at the solver's late-delivery deterrent rate. Suppress the money.
+    baseline_totals_reconcile: bool = True
 
     @property
     def baseline_is_comparable(self) -> bool:

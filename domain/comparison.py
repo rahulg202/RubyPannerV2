@@ -82,6 +82,22 @@ class BaselineResult:
         """True when the manual plan obeys every constraint the optimizer obeys."""
         return not self.infeasibilities
 
+    @property
+    def totals_reconcile(self) -> bool:
+        """Whether the plan produces exactly the horizon's demand.
+
+        When it does not, this cost must not be published at any scale. Every
+        unreconciled unit sits in backlog for the rest of the horizon and is
+        charged ``late_penalty_rate`` -- 100x the holding rate -- which exists to
+        stop the *solver* choosing backlog, not to price anything a business pays.
+        A 30-unit gap has produced a billion-dollar "cost" on real data.
+
+        The gap is usually not a planning error. Demand is modelled as each site
+        repeating a fixed interval, while the Master Planner is irregular, so the
+        two totals only agree for windows where the model happens to line up.
+        """
+        return self.terminal_inventory == 0
+
 
 def compute_baseline_cost(
     planned_production: Sequence[int],

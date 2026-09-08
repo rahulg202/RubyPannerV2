@@ -390,6 +390,40 @@ def test_comparison_service_comparable_when_manual_plan_is_legal():
     assert result.baseline_infeasibilities == []
 
 
+def test_unreconciled_totals_are_flagged_so_the_cost_can_be_withheld():
+    """A whole-horizon gap makes the baseline cost an artefact, not a number.
+
+    The shortfall is charged at ``late_penalty_rate`` (100x the holding rate), a
+    deterrent aimed at the solver rather than a real price. On the reference
+    workbook a 30-unit gap produced a $1.03bn baseline. The UI relies on this flag
+    to publish no money at all.
+    """
+    T = PARAMS.horizon_weeks
+    planned = [0] * (T + 1)
+    planned[3] = 10          # demand is 10 in week 3 and 10 in week 8
+    result = ComparisonService(FakeMasterPlannerReader(planned)).run(
+        _comparison_request())
+
+    assert not result.baseline_totals_reconcile
+    assert result.baseline.terminal_inventory == -10
+    # The cost is still computed -- it is the UI's job to withhold it -- and it is
+    # inflated by the late multiplier, which is exactly why it must not be shown.
+    assert result.baseline.summary["total_penalty_cost"] >= (
+        PARAMS.late_penalty_rate * 10
+    )
+
+
+def test_reconciled_totals_allow_the_cost_to_be_shown():
+    T = PARAMS.horizon_weeks
+    planned = [0] * (T + 1)
+    planned[3] = 10
+    planned[8] = 10
+    result = ComparisonService(FakeMasterPlannerReader(planned)).run(
+        _comparison_request())
+    assert result.baseline_totals_reconcile
+    assert result.baseline.terminal_inventory == 0
+
+
 def test_comparison_service_overtime_counts_reported():
     svc = ComparisonService(FakeMasterPlannerReader())
     result = svc.run(_comparison_request())

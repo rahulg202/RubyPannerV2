@@ -125,4 +125,5 @@ class ComparisonService:
             match_summary=match_summary,
             week_dates=_week_dates(mp, request.params.horizon_weeks),
             baseline_infeasibilities=baseline.infeasibilities,
+            baseline_totals_reconcile=baseline.totals_reconcile,
         )

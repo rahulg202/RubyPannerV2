@@ -242,6 +242,31 @@ own question.
 **L5 — Capacity cost is mostly structural.** See §8. Roughly 98% of it is unavoidable
 arithmetic, not something the optimizer can improve.
 
+**L7 — A cost comparison is only shown when the two totals reconcile.** Demand is
+modelled as each site repeating a fixed interval from its first delivery, while the
+Master Planner is smoothed by hand. Over a given 52-week window the two totals need
+not agree, and moving the reference week moves the window:
+
+| Reference week | Manual plan | Demand model | Gap |
+|---|---|---|---|
+| not set (tool picks the year) | 1,500 | 1,500 | 0 |
+| 04 Jan 2027 | 1,528 | 1,528 | 0 |
+| 01 Feb 2027 | 1,564 | 1,568 | −4 |
+| 01 Jan 2026 | 1,470 | 1,534 | −64 |
+| 01 Jun 2026 | 1,558 | 1,624 | −66 |
+
+Where they disagree, every unreconciled generator counts as a late delivery for the
+rest of the horizon, priced at 100× the cost of holding stock early. That multiplier
+exists to stop the optimizer ever choosing to run late — it is not a price anyone
+pays. Applied to a whole-horizon gap it produces absurd figures: a 30-unit gap
+generated a **$1.03 billion** baseline on this workbook.
+
+The tool therefore **shows no cost at all** when the totals differ. It reports both
+totals, the gap, and the week-by-week divergence instead. This is a reporting limit,
+not a fix: reconciling the cadence model with the hand-smoothed plan is on the
+roadmap (§10.5). For now, leave the reference week unset for a comparison, and use it
+for the date labelling on the other tabs.
+
 **L6 — Your manual plan is evaluated, not solved, and it may not be executable.**
 The Comparison tab replays your Master Planner through the same cost model as the
 optimizer. It does not *solve* it, so your plan can sit outside limits the optimizer
