@@ -40,6 +40,32 @@ def _read_sheet_names(data: bytes) -> list[str] | None:
         return None
 
 
+def _fingerprint(uploaded) -> str:
+    """Identify an upload, so the same file is not treated as a new one."""
+    file_id = getattr(uploaded, "file_id", None)
+    if file_id:
+        return str(file_id)
+    return f"{uploaded.name}:{getattr(uploaded, 'size', '')}"
+
+
+def _newly_uploaded(uploaded, fingerprint_key: str) -> bytes | None:
+    """Bytes when this is a *different* file from the one already loaded.
+
+    ``st.file_uploader`` keeps returning its file on every rerun, not only on the
+    run where it was chosen. Acting on it unconditionally meant every interaction
+    re-read the file and cleared every result — so running the optimizer and then
+    pressing anything discarded the plan, and the Comparison tab reported that the
+    optimizer had not been run.
+    """
+    if uploaded is None:
+        return None
+    fingerprint = _fingerprint(uploaded)
+    if st.session_state.get(fingerprint_key) == fingerprint:
+        return None
+    st.session_state[fingerprint_key] = fingerprint
+    return uploaded.read()
+
+
 def _sites_section() -> None:
     """Upload the sites input file and choose its worksheet."""
     st.markdown("**Sites input file**")
@@ -52,8 +78,8 @@ def _sites_section() -> None:
              "Interval_Weeks, Country.",
     )
 
-    if uploaded is not None:
-        data = uploaded.read()
+    data = _newly_uploaded(uploaded, S.SITES_FP)
+    if data is not None:
         st.session_state[S.SITES_BYTES] = data
         st.session_state[S.SITES_NAME] = uploaded.name
         # A new file invalidates everything derived from the old one.
@@ -121,8 +147,8 @@ def _planner_section() -> None:
              "against, and to onboard into a fixed plan.",
     )
 
-    if uploaded is not None:
-        data = uploaded.read()
+    data = _newly_uploaded(uploaded, S.MP_FP)
+    if data is not None:
         st.session_state[S.MP_BYTES] = data
         st.session_state[S.MP_NAME] = uploaded.name
         S.clear_results(st.session_state)
@@ -205,6 +231,9 @@ def _derive_section(conversion_service, settings) -> None:
                                             "Conversion_Notes"]
         st.session_state[S.SITES_SHEET] = "Sites"
         st.session_state[S.SITES_FROM_PLANNER] = True
+        # The uploader's fingerprint is deliberately left alone. Clearing it would
+        # make the file still sitting in the uploader look new on the rerun below,
+        # and it would immediately overwrite what was just derived.
         # The sheet dropdown owns its own widget state and would otherwise
         # reassert a sheet name belonging to the previous file.
         st.session_state.pop("sb_sites_sheet", None)
@@ -241,8 +270,9 @@ def render(conversion_service=None, settings=None) -> None:
                          help="Removes both files and every result derived "
                               "from them."):
                 for key in (S.SITES_BYTES, S.SITES_NAME, S.SITES_SHEETS,
-                            S.SITES_SHEET, S.SITES_FROM_PLANNER, S.MP_BYTES,
-                            S.MP_NAME, S.MP_SHEETS, S.MP_SHEET):
+                            S.SITES_SHEET, S.SITES_FROM_PLANNER, S.SITES_FP,
+                            S.MP_BYTES, S.MP_NAME, S.MP_SHEETS, S.MP_SHEET,
+                            S.MP_FP):
                     st.session_state[key] = None
                 S.clear_results(st.session_state)
                 st.success("Cleared.")

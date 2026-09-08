@@ -18,6 +18,11 @@ SITES_NAME = "sites_name"
 SITES_SHEETS = "sites_sheet_names"
 SITES_SHEET = "sites_sheet"
 SITES_FROM_PLANNER = "sites_from_planner"  # True when derived, not uploaded
+# Identifies the file currently in each uploader. st.file_uploader returns its
+# file on every rerun, so without this the app would re-read it and clear every
+# result on each interaction.
+SITES_FP = "sites_fingerprint"
+MP_FP = "mp_fingerprint"
 MP_BYTES = "mp_bytes"
 MP_NAME = "mp_name"
 MP_SHEETS = "mp_sheet_names"
@@ -38,7 +43,7 @@ SIDEBAR_FLASH = "sidebar_flash"    # message shown once after a rerun
 
 ALL_KEYS = [
     SITES_BYTES, SITES_NAME, SITES_SHEETS, SITES_SHEET, SITES_FROM_PLANNER,
-    MP_BYTES, MP_NAME, MP_SHEETS, MP_SHEET,
+    SITES_FP, MP_BYTES, MP_NAME, MP_SHEETS, MP_SHEET, MP_FP,
     OPT_RESULT, CMP_RESULT, OB_RESULT, OB_CUSTOMERS, OB_VIEW, OB_EDITOR_MODE,
     OB_SELECTION, OB_GENERATED, CONV_RESULT, CONV_ANNOTATED,
 ]
