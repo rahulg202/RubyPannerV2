@@ -17,6 +17,7 @@ SITES_BYTES = "sites_bytes"
 SITES_NAME = "sites_name"
 SITES_SHEETS = "sites_sheet_names"
 SITES_SHEET = "sites_sheet"
+SITES_FROM_PLANNER = "sites_from_planner"  # True when derived, not uploaded
 MP_BYTES = "mp_bytes"
 MP_NAME = "mp_name"
 MP_SHEETS = "mp_sheet_names"
@@ -26,17 +27,20 @@ MP_SHEET = "mp_sheet"
 OPT_RESULT = "opt_result"
 CMP_RESULT = "cmp_result"
 OB_RESULT = "ob_result"
-OB_CUSTOMERS = "ob_customers"
+OB_CUSTOMERS = "ob_customers"      # seed handed to the editor; kept stable
+OB_VIEW = "ob_customers_view"      # last resolved editor output; never fed back
+OB_EDITOR_MODE = "ob_editor_mode"  # "weeks" or "dates", to detect a switch
 OB_SELECTION = "ob_selection"
 OB_GENERATED = "ob_generated_file"
 CONV_RESULT = "conv_result"
 CONV_ANNOTATED = "conv_annotated_planner"
+SIDEBAR_FLASH = "sidebar_flash"    # message shown once after a rerun
 
 ALL_KEYS = [
-    SITES_BYTES, SITES_NAME, SITES_SHEETS, SITES_SHEET,
+    SITES_BYTES, SITES_NAME, SITES_SHEETS, SITES_SHEET, SITES_FROM_PLANNER,
     MP_BYTES, MP_NAME, MP_SHEETS, MP_SHEET,
-    OPT_RESULT, CMP_RESULT, OB_RESULT, OB_CUSTOMERS, OB_SELECTION, OB_GENERATED,
-    CONV_RESULT, CONV_ANNOTATED,
+    OPT_RESULT, CMP_RESULT, OB_RESULT, OB_CUSTOMERS, OB_VIEW, OB_EDITOR_MODE,
+    OB_SELECTION, OB_GENERATED, CONV_RESULT, CONV_ANNOTATED,
 ]
 
 

@@ -22,10 +22,14 @@ import io
 import pandas as pd
 import streamlit as st
 
+from domain.errors import RubyFillError, ValidationError
+from services.dtos import ConversionRequest
 from ui import state as S
+from ui.formatting import XLSX_MIME
 
 SITES_TYPES = ["xlsx", "xls", "csv"]
 PLANNER_TYPES = ["xlsx", "xls"]
+DERIVED_FILENAME = "sites_from_manual_plan.xlsx"
 
 
 def _read_sheet_names(data: bytes) -> list[str] | None:
@@ -55,6 +59,8 @@ def _sites_section() -> None:
         # A new file invalidates everything derived from the old one.
         S.clear_results(st.session_state)
 
+        st.session_state[S.SITES_FROM_PLANNER] = False
+
         if uploaded.name.lower().endswith(".csv"):
             st.session_state[S.SITES_SHEETS] = None
             st.session_state[S.SITES_SHEET] = "Sites"
@@ -69,6 +75,24 @@ def _sites_section() -> None:
         st.caption("Not loaded. The Cost Optimizer and Onboarding need this.")
         return
 
+    if st.session_state.get(S.SITES_FROM_PLANNER):
+        st.caption(f"✓ **{name}** — built from your manual plan")
+        st.download_button(
+            "Download this input file",
+            data=st.session_state[S.SITES_BYTES],
+            file_name=name,
+            mime=XLSX_MIME,
+            key="sb_download_derived",
+            help="The input file derived from your Master Planner, so you can "
+                 "keep it, check it, or edit it outside the tool.",
+        )
+        sheets_note = st.session_state.get(S.SITES_SHEETS) or []
+        if sheets_note:
+            st.caption(
+                "Its **Site_Mapping** sheet lists each code against the Master "
+                "Planner column it came from."
+            )
+
     sheets = st.session_state.get(S.SITES_SHEETS)
     if sheets:
         current = st.session_state.get(S.SITES_SHEET)
@@ -81,7 +105,8 @@ def _sites_section() -> None:
         )
     else:
         st.session_state.setdefault(S.SITES_SHEET, "Sites")
-    st.caption(f"✓ **{name}**")
+    if not st.session_state.get(S.SITES_FROM_PLANNER):
+        st.caption(f"✓ **{name}**")
 
 
 def _planner_section() -> None:
@@ -131,17 +156,84 @@ def _planner_section() -> None:
     st.caption(f"✓ **{name}**")
 
 
-def render() -> None:
-    """Draw the shared file loader. Call once, before the tabs."""
+def _derive_section(conversion_service, settings) -> None:
+    """Build the sites input file from the Master Planner, on request.
+
+    Deliberately a button rather than automatic. Deriving models each site as a
+    fixed repeating interval from one start week, which is lumpier than a sheet the
+    team maintains by hand — on the reference workbook the derived demand has a
+    standard deviation of 9.5 against 7.2, with five weeks under ten generators.
+    Substituting it silently would change the plan without the planner knowing why.
+    """
+    if not planner_loaded():
+        return
+
+    st.divider()
+    st.markdown("**Or build the sites file from the plan**")
+
+    if isinstance(settings, ValidationError):
+        st.caption("Fix the settings errors first.")
+        return
+    if conversion_service is None:
+        return
+
+    already = st.session_state.get(S.SITES_FROM_PLANNER)
+    label = "Rebuild sites from the manual plan" if already else \
+            "Derive sites from the manual plan"
+    st.caption(
+        "Reads your Master Planner and writes the input file the optimizer needs, "
+        "so you can plan without maintaining a separate sites file. Replaces "
+        "whatever is loaded above."
+    )
+
+    if st.button(label, key="sb_derive"):
+        with st.spinner("Reading the manual plan..."):
+            try:
+                result = conversion_service.run(ConversionRequest(
+                    master_planner_bytes=st.session_state[S.MP_BYTES],
+                    master_planner_sheet=planner_sheet(),
+                    horizon_weeks=settings.params.horizon_weeks,
+                    reference_week_date=settings.reference_week_date,
+                ))
+            except (RubyFillError, ValueError) as exc:
+                st.error(f"Could not build the input file: {exc}")
+                return
+
+        st.session_state[S.SITES_BYTES] = result.xlsx_bytes
+        st.session_state[S.SITES_NAME] = DERIVED_FILENAME
+        st.session_state[S.SITES_SHEETS] = ["Sites", "Site_Mapping",
+                                            "Conversion_Notes"]
+        st.session_state[S.SITES_SHEET] = "Sites"
+        st.session_state[S.SITES_FROM_PLANNER] = True
+        # The sheet dropdown owns its own widget state and would otherwise
+        # reassert a sheet name belonging to the previous file.
+        st.session_state.pop("sb_sites_sheet", None)
+        S.clear_results(st.session_state)
+        st.session_state[S.SIDEBAR_FLASH] = (
+            f"Built from {result.active_count} active site(s). Open the Cost "
+            f"Optimizer and press Run optimizer."
+        )
+        # Rerun so the sections above — which have already rendered this pass —
+        # pick up the new file. Without it the download button for the derived
+        # file would not appear until the planner touched something else.
+        st.rerun()
+
+
+def render(conversion_service=None, settings=None) -> None:
+    """Draw the shared file loader. Call once; the sidebar renders in place."""
     with st.sidebar:
         st.header("Files")
         st.caption(
             "Load each file once here. Every tab uses what is loaded, so there is "
             "nothing to upload again."
         )
+        flash = st.session_state.pop(S.SIDEBAR_FLASH, None)
+        if flash:
+            st.success(flash)
         _sites_section()
         st.divider()
         _planner_section()
+        _derive_section(conversion_service, settings)
 
         if st.session_state.get(S.SITES_BYTES) or st.session_state.get(S.MP_BYTES):
             st.divider()
@@ -149,8 +241,8 @@ def render() -> None:
                          help="Removes both files and every result derived "
                               "from them."):
                 for key in (S.SITES_BYTES, S.SITES_NAME, S.SITES_SHEETS,
-                            S.SITES_SHEET, S.MP_BYTES, S.MP_NAME, S.MP_SHEETS,
-                            S.MP_SHEET):
+                            S.SITES_SHEET, S.SITES_FROM_PLANNER, S.MP_BYTES,
+                            S.MP_NAME, S.MP_SHEETS, S.MP_SHEET):
                     st.session_state[key] = None
                 S.clear_results(st.session_state)
                 st.success("Cleared.")

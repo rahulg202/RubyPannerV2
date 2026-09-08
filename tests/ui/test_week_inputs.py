@@ -84,11 +84,9 @@ def _frame(**over) -> pd.DataFrame:
 
 
 def test_frame_migrates_week_numbers_to_dates():
-    from ui.tab_onboarding import _editor_frame
+    from ui.tab_onboarding import _shape_frame
 
-    S.init_state(st.session_state)
-    st.session_state[S.OB_CUSTOMERS] = _frame()
-    out = _editor_frame(MONDAY, 52)
+    out = _shape_frame(_frame(), MONDAY, 52)
 
     assert "Earliest_Date" in out.columns and "Latest_Date" in out.columns
     assert "Earliest_Week" not in out.columns
@@ -98,40 +96,94 @@ def test_frame_migrates_week_numbers_to_dates():
 
 
 def test_frame_migrates_dates_back_to_week_numbers():
-    from ui.tab_onboarding import _editor_frame
+    from ui.tab_onboarding import _shape_frame
 
-    S.init_state(st.session_state)
-    st.session_state[S.OB_CUSTOMERS] = _frame().assign(
+    dated = _frame().assign(
         Earliest_Date=[date(2026, 1, 19)], Latest_Date=[date(2026, 3, 2)],
     ).drop(columns=["Earliest_Week", "Latest_Week"])
 
-    out = _editor_frame(None, 52)
+    out = _shape_frame(dated, None, 52)
     assert "Earliest_Week" in out.columns
     assert "Earliest_Date" not in out.columns
 
 
 def test_switching_modes_does_not_lose_rows():
-    from ui.tab_onboarding import _editor_frame
+    from ui.tab_onboarding import _shape_frame
 
-    S.init_state(st.session_state)
-    st.session_state[S.OB_CUSTOMERS] = _frame(Site_ID="KEEP-ME")
-    with_dates = _editor_frame(MONDAY, 52)
-    st.session_state[S.OB_CUSTOMERS] = with_dates
-    back_to_weeks = _editor_frame(None, 52)
+    with_dates = _shape_frame(_frame(Site_ID="KEEP-ME"), MONDAY, 52)
+    back_to_weeks = _shape_frame(with_dates, None, 52)
 
     assert list(back_to_weeks["Site_ID"]) == ["KEEP-ME"]
     assert len(back_to_weeks) == 1
 
 
 def test_column_order_is_stable():
-    from ui.tab_onboarding import _editor_frame
+    from ui.tab_onboarding import _shape_frame
 
-    S.init_state(st.session_state)
-    st.session_state[S.OB_CUSTOMERS] = _frame()
-    assert list(_editor_frame(MONDAY, 52)) == [
+    assert list(_shape_frame(_frame(), MONDAY, 52)) == [
         "Site_ID", "Site_Name", "Earliest_Date", "Latest_Date",
         "Interval_Weeks", "Country", "EU_Restricted",
     ]
+
+
+# ---------------------------------------------------------------------------
+# The editor's input must stay stable, or its edits get replayed twice
+# ---------------------------------------------------------------------------
+
+def test_seed_is_not_rebuilt_on_every_rerun():
+    """Regression: adding a second row used to wipe the first.
+
+    Streamlit stores data_editor changes as a positional delta and replays them
+    onto whatever data it is handed. The seed was being rebuilt from the editor's
+    own output each rerun, so "add a row" and "row 0 was edited" were applied a
+    second time against data that already contained them.
+    """
+    from ui.tab_onboarding import _editor_seed
+
+    S.init_state(st.session_state)
+    first = _editor_seed(None, 52)
+    st.session_state[S.OB_VIEW] = _frame(Site_ID="TYPED-BY-USER")
+
+    # A later rerun, same mode, must hand back the very same object.
+    assert _editor_seed(None, 52) is first
+
+
+def test_seed_is_reshaped_only_when_the_mode_changes():
+    from ui.tab_onboarding import _editor_seed
+
+    S.init_state(st.session_state)
+    st.session_state[S.OB_CUSTOMERS] = _frame(Site_ID="KEEP-ME")
+    weeks_seed = _editor_seed(None, 52)
+    assert "Earliest_Week" in weeks_seed.columns
+
+    # The planner has since typed into the editor; that is what must carry over.
+    st.session_state[S.OB_VIEW] = _frame(Site_ID="TYPED-LATER")
+    dates_seed = _editor_seed(MONDAY, 52)
+
+    assert "Earliest_Date" in dates_seed.columns
+    assert list(dates_seed["Site_ID"]) == ["TYPED-LATER"]
+
+
+def test_switching_mode_drops_the_outgoing_editor_state():
+    """A stale delta would otherwise replay against columns that no longer exist."""
+    from ui.tab_onboarding import _editor_seed
+
+    S.init_state(st.session_state)
+    _editor_seed(None, 52)
+    st.session_state["ob_editor_weeks"] = {"edited_rows": {0: {"Earliest_Week": 9}}}
+
+    _editor_seed(MONDAY, 52)
+    assert "ob_editor_weeks" not in st.session_state
+
+
+def test_seed_recovers_from_an_empty_frame():
+    from ui.tab_onboarding import _editor_seed
+
+    S.init_state(st.session_state)
+    st.session_state[S.OB_CUSTOMERS] = pd.DataFrame()
+    seed = _editor_seed(None, 52)
+    assert len(seed) == 1
+    assert "Site_ID" in seed.columns
 
 
 def test_customers_are_built_from_dates():

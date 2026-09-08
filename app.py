@@ -90,15 +90,18 @@ def main() -> None:
          "Comparison"]
     )
 
-    # Files are loaded once, in the sidebar, and shared by every tab.
-    sidebar.render()
-
     with tab_set:
         tab_settings.render()
 
     # Settings are read once after the Settings tab has registered its widgets, so
     # every workflow tab sees the same validated configuration.
     settings = current_settings()
+
+    # Files are loaded once, in the sidebar, and shared by every tab. Rendered
+    # after settings because deriving a sites file from the manual plan needs the
+    # horizon and reference week; Streamlit places sidebar content by container,
+    # not by call order, so this still appears above the tabs.
+    sidebar.render(conversion_service, settings)
 
     with tab_conv:
         tab_converter.render(conversion_service, settings)

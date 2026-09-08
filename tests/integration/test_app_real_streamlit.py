@@ -374,3 +374,99 @@ assert at.session_state["sites_sheet"] == "Sites", at.session_state["sites_sheet
 assert at.session_state["mp_sheet"] == "Schedule", at.session_state["mp_sheet"]
 print("sheets:", at.session_state["sites_sheet"], at.session_state["mp_sheet"])
 """))
+
+
+# ---------------------------------------------------------------------------
+# A manual plan on its own is enough to optimize
+# ---------------------------------------------------------------------------
+
+_PLANNER_FIXTURE = """
+import io
+from datetime import datetime
+
+import openpyxl
+
+def planner_bytes(weeks=12):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Schedule"
+    ws.append([None] * 13)
+    ws.append(["Weeks #", "MFG Date", "Calibration date", "Problem?", "Month",
+               "FY", "US Demand", "RoW Demand", "Total Commercial", "QC GEN",
+               "US STAB", "00449  Alpha Care, CA (7)", "Beta Imaging, TX (7)"])
+    monday = datetime(2026, 1, 5)
+    for week in range(1, weeks + 1):
+        mfg = datetime.fromordinal(monday.toordinal() + 7 * (week - 1))
+        a = 1 if (week - 1) % 7 == 0 else None
+        b = 1 if (week - 3) % 7 == 0 and week >= 3 else None
+        ws.append([week, mfg, datetime.fromordinal(mfg.toordinal() + 4), None,
+                   mfg.strftime("%b"), 2026, 0, 0,
+                   int(bool(a)) + int(bool(b)), 1, None, a, b])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+"""
+
+
+def test_sites_can_be_derived_from_the_manual_plan_alone():
+    """Uploading only the Master Planner must be enough to reach the optimizer."""
+    _assert_rendered(_run(_HEADER + _PLANNER_FIXTURE + """
+at = AppTest.from_file("app.py", default_timeout=300)
+at.session_state["mp_bytes"] = planner_bytes()
+at.session_state["mp_name"] = "planner.xlsx"
+at.session_state["mp_sheet_names"] = ["Schedule"]
+at.run()
+report(at)
+
+# No sites file yet, so the tabs must point at the derive action rather than
+# simply refusing.
+assert at.session_state["sites_bytes"] is None
+labels = [b.label for b in at.button]
+assert any("Derive sites from the manual plan" in l for l in labels), labels
+print("derive offered:", [l for l in labels if "Derive" in l])
+"""))
+
+
+def test_deriving_loads_a_sites_file_and_offers_it_for_download():
+    """The planner asked to be able to keep the generated input file."""
+    _assert_rendered(_run(_HEADER + _PLANNER_FIXTURE + """
+at = AppTest.from_file("app.py", default_timeout=300)
+at.session_state["mp_bytes"] = planner_bytes()
+at.session_state["mp_name"] = "planner.xlsx"
+at.session_state["mp_sheet_names"] = ["Schedule"]
+at.run()
+report(at)
+
+derive = next(b for b in at.button if "Derive sites" in b.label)
+derive.click().run()
+report(at)
+
+assert at.session_state["sites_bytes"], "deriving should load a sites file"
+assert at.session_state["sites_from_planner"] is True
+assert at.session_state["sites_name"] == "sites_from_manual_plan.xlsx"
+
+# And it must be downloadable, not only usable in place.
+downloads = [d.label for d in at.download_button]
+assert any("Download this input file" in l for l in downloads), downloads
+print("derived", len(at.session_state["sites_bytes"]), "bytes; downloads:", downloads)
+"""))
+
+
+def test_a_derived_sites_file_reaches_the_optimizer():
+    _assert_rendered(_run(_HEADER + _PLANNER_FIXTURE + """
+at = AppTest.from_file("app.py", default_timeout=300)
+at.session_state["mp_bytes"] = planner_bytes()
+at.session_state["mp_name"] = "planner.xlsx"
+at.session_state["mp_sheet_names"] = ["Schedule"]
+at.run()
+next(b for b in at.button if "Derive sites" in b.label).click().run()
+report(at)
+
+# The sheet the optimizer will read is the derived workbook's Sites sheet.
+assert at.session_state["sites_sheet"] == "Sites", at.session_state["sites_sheet"]
+# The dropdown re-registers after the rerun, and must agree rather than
+# reasserting a sheet name belonging to the file it replaced.
+assert at.session_state["sb_sites_sheet"] == "Sites", \\
+    at.session_state["sb_sites_sheet"]
+print("optimizer would read sheet:", at.session_state["sites_sheet"])
+"""))

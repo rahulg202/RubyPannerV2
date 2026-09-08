@@ -74,6 +74,27 @@ Two files, loaded once, shared by every tab.
 | **Sites input file** | Cost Optimizer, Onboarding (re-plan mode) |
 | **Master Planner workbook** | Import Manual Plan, Comparison, changed customer weeks, Onboarding (fixed mode) |
 
+### You don't have to maintain a sites file
+
+If you only load the Master Planner, press **Derive sites from the manual plan** in
+the sidebar. The tool builds the input file from your plan and loads it, so the Cost
+Optimizer and Onboarding work with nothing else to prepare. **Download this input
+file** appears next to it, so you can keep, check or edit the generated file — its
+`Site_Mapping` sheet lists each code against the Master Planner column it came from.
+
+It's a button rather than automatic on purpose. Deriving models each site as a fixed
+repeating interval from one start week, which is lumpier than a sheet you maintain by
+hand:
+
+```
+demand profile                     std dev   min   max
+derived from Master Planner            9.5     0    40
+a maintained sites file                7.2    12    40
+```
+
+Close enough to plan with, but not identical — so the tool won't substitute it
+without you asking.
+
 Each has one sheet selector, also in the sidebar. For the Master Planner that is
 normally `Schedule`; if you pick a sheet that isn't the schedule grid the tool finds
 the right one and tells you which it used.

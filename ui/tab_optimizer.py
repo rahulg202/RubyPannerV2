@@ -236,7 +236,16 @@ def render(optimizer_service, settings_or_error) -> None:
     settings = settings_or_error
 
     sheet = sidebar.sites_sheet()
-    have_file = sidebar.require(sites=True)
+    have_file = sidebar.sites_loaded()
+    if not have_file:
+        if sidebar.planner_loaded():
+            st.info(
+                "No sites file loaded. You do not need one — press **Derive sites "
+                "from the manual plan** in the sidebar and the tool will build it "
+                "from your Master Planner."
+            )
+        else:
+            sidebar.require(sites=True)
     if have_file and not sidebar.planner_loaded():
         st.caption(
             "No Master Planner loaded. The plan will still run, but changed "

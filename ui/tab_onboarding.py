@@ -43,6 +43,34 @@ WEEK_COLUMNS = ("Earliest_Week", "Latest_Week")
 DATE_COLUMNS = ("Earliest_Date", "Latest_Date")
 
 
+def _editor_seed(reference: date | None, horizon: int) -> pd.DataFrame:
+    """The frame handed to the editor, kept stable across reruns.
+
+    The editor owns the rows once seeded. This only rebuilds the seed when there
+    is nothing yet, or when switching between week numbers and dates changes the
+    columns — in which case the outgoing widget's stored edits are dropped, since
+    they refer to columns that no longer exist.
+    """
+    mode = "dates" if reference is not None else "weeks"
+    previous = st.session_state.get(S.OB_EDITOR_MODE)
+
+    if previous != mode:
+        # Carry across whatever the planner has already typed.
+        source = st.session_state.get(S.OB_VIEW)
+        if not isinstance(source, pd.DataFrame) or source.empty:
+            source = st.session_state.get(S.OB_CUSTOMERS)
+        st.session_state[S.OB_CUSTOMERS] = _shape_frame(source, reference, horizon)
+        if previous:
+            st.session_state.pop(f"ob_editor_{previous}", None)
+        st.session_state[S.OB_EDITOR_MODE] = mode
+
+    seed = st.session_state.get(S.OB_CUSTOMERS)
+    if not isinstance(seed, pd.DataFrame) or seed.empty:
+        seed = _shape_frame(None, reference, horizon)
+        st.session_state[S.OB_CUSTOMERS] = seed
+    return seed
+
+
 def _date_for_week(reference: date, week: int) -> date:
     return reference + timedelta(days=7 * (max(1, int(week)) - 1))
 
@@ -60,13 +88,21 @@ def _week_for_date(reference: date, value, horizon: int, default: int) -> int:
     return week
 
 
-def _editor_frame(reference: date | None, horizon: int) -> pd.DataFrame:
-    """The editor rows, migrated between week numbers and dates as needed.
+def _shape_frame(
+    existing: pd.DataFrame | None,
+    reference: date | None,
+    horizon: int,
+) -> pd.DataFrame:
+    """Put the editor rows into the shape the current mode needs.
 
     Switching the reference week on or off must not cost the planner their rows,
     so existing values are converted rather than reset.
+
+    Called only when seeding the editor or when the mode changes — never on every
+    rerun. Reshaping a live editor's input makes Streamlit replay its stored edit
+    delta against data that already contains those edits, which duplicates and
+    shifts rows.
     """
-    existing = st.session_state.get(S.OB_CUSTOMERS)
     frame = (
         existing.copy()
         if isinstance(existing, pd.DataFrame) and not existing.empty
@@ -215,7 +251,7 @@ def _render_editor(reference: date | None = None,
     )
 
     edited = st.data_editor(
-        _editor_frame(reference, horizon),
+        _editor_seed(reference, horizon),
         num_rows="dynamic",
         width="stretch",
         # Separate keys per mode: the columns differ, and reusing one key would
@@ -237,7 +273,12 @@ def _render_editor(reference: date | None = None,
                      "receive BWXT-sourced material."),
         },
     )
-    st.session_state[S.OB_CUSTOMERS] = edited
+    # Mirrored for migration and for the rest of this run only. Deliberately not
+    # written back into the seed the editor was given: Streamlit stores edits as a
+    # positional delta and replays them onto whatever data it receives, so feeding
+    # its own output back applies every edit twice — which is what made adding a
+    # second row wipe the first.
+    st.session_state[S.OB_VIEW] = edited
     return _to_customers(edited, reference, horizon)
 
 
@@ -589,7 +630,15 @@ def render(onboarding_service, settings_or_error) -> None:
         ready = sidebar.require(planner=True)
     else:
         # Re-planning mode needs existing demand as the baseline.
-        ready = sidebar.require(sites=True)
+        ready = sidebar.sites_loaded()
+        if not ready:
+            if sidebar.planner_loaded():
+                st.info(
+                    "No sites file loaded. Press **Derive sites from the manual "
+                    "plan** in the sidebar to build one from your Master Planner."
+                )
+            else:
+                sidebar.require(sites=True)
 
     customers = _render_editor(
         settings.reference_week_date, settings.params.horizon_weeks
