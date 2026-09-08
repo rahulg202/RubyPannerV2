@@ -189,6 +189,26 @@ def test_swedish_named_us_site_is_not_sweden():
     assert infer_country("00617  Swedish Medical Center, Bronx, NY (7)") == "usa"
 
 
+@pytest.mark.parametrize("header", [
+    "00705  New England/ Merrimack Valley PET, Manchester, NH (7)",
+    "00606  Cadiovascular specialist of New-England, NH, (7)",
+    "New  England Cardiology, Boston, MA (6)",
+])
+def test_new_england_is_not_the_united_kingdom(header):
+    """A word-boundary match on "england" cannot separate these from the UK.
+
+    Both real headers are New Hampshire sites. Reading them as UK put them under
+    the EU shipping cap, which invented five of the seven cap violations reported
+    against the reference workbook.
+    """
+    assert infer_country(header) == "usa"
+
+
+def test_genuine_uk_site_still_detected():
+    assert infer_country("1405  Epsilon UK, London UK (7)") == "uk"
+    assert infer_country("Royal Free, London, England (7)") == "uk"
+
+
 def test_country_defaults_to_usa():
     assert infer_country("00605  Watson Clinic (7)") == "usa"
 

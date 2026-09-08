@@ -32,6 +32,14 @@ from domain.demand import ROW_COUNTRIES
 COUNTRY_USA = "usa"
 
 # Ordered country rules. First match wins, so put the specific tokens first.
+# US places whose names contain another country's name. Checked *before* the
+# country patterns, because a word-boundary match cannot tell them apart:
+# "New England" and "New-England" both contain "England" bounded by a hyphen or
+# space. Two New Hampshire sites in the reference workbook are affected
+# (Merrimack Valley PET, and Cardiovascular Specialists of New-England), and
+# reading them as UK wrongly subjects them to the EU shipping cap.
+_US_PLACE_OVERRIDES = re.compile(r"\bnew[\s\-]*england\b", re.IGNORECASE)
+
 # Word boundaries matter: "Swedish Medical Center, Bronx, NY" is a US site and
 # must not be read as Sweden.
 _COUNTRY_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -189,9 +197,13 @@ def infer_country(header: str) -> str:
 
     Defaults to ``"usa"``: the Master Planner is overwhelmingly US sites, and
     non-US ones name their country or an unambiguous city. Matching uses word
-    boundaries so ``"Swedish Medical Center, Bronx, NY"`` stays a US site.
+    boundaries so ``"Swedish Medical Center, Bronx, NY"`` stays a US site, and
+    US place names that embed another country ("New England") are excluded first
+    because word boundaries alone cannot separate them.
     """
     text = str(header).lower()
+    if _US_PLACE_OVERRIDES.search(text):
+        return COUNTRY_USA
     for country, pattern in _COUNTRY_PATTERNS:
         if re.search(pattern, text):
             return country
