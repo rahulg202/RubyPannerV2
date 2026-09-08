@@ -66,10 +66,15 @@ class FakeExporter:
 
 
 class FakeMasterPlannerData:
-    def __init__(self, planned, schedule=None):
-        self.weekly_planned_production = planned
+    def __init__(self, planned, schedule=None, qc=None):
+        # ``planned`` is the sellable (commercial) figure. QC generators are
+        # extra units on top of it, so weekly_planned_production is the sum --
+        # mirroring the real parser, so tests can tell the two apart.
         self.weekly_commercial = planned
-        self.weekly_qc = [0] * len(planned)
+        self.weekly_qc = qc if qc is not None else [0] * len(planned)
+        self.weekly_planned_production = [
+            c + q for c, q in zip(planned, self.weekly_qc)
+        ]
         self.customer_schedule = schedule or {}
         self.assigned_ids = []
         self.ignored_columns = []
@@ -82,10 +87,11 @@ class FakeMasterPlannerData:
 
 class FakeMasterPlannerReader:
     def __init__(self, planned=None, schedule=None, raise_exc: Exception | None = None,
-                 mfg_dates=None, cal_dates=None):
+                 mfg_dates=None, cal_dates=None, qc=None):
         T = PARAMS.horizon_weeks
         self.planned = planned if planned is not None else [0] * (T + 1)
         self.schedule = schedule or {}
+        self.qc = qc
         self.raise_exc = raise_exc
         # Optional dates, for callers checking that weeks can be shown as dates.
         self.mfg_dates = mfg_dates
@@ -97,7 +103,7 @@ class FakeMasterPlannerReader:
         self.calls += 1
         if self.raise_exc:
             raise self.raise_exc
-        data = FakeMasterPlannerData(self.planned, self.schedule)
+        data = FakeMasterPlannerData(self.planned, self.schedule, qc=self.qc)
         if self.mfg_dates is not None:
             data.mfg_dates = self.mfg_dates
         if self.cal_dates is not None:
@@ -306,6 +312,47 @@ def test_comparison_service_warns_on_capacity_violation():
     svc = ComparisonService(FakeMasterPlannerReader(planned))
     result = svc.run(_comparison_request())
     assert any("exceeds weekly capacity" in w for w in result.warnings)
+
+
+def test_comparison_baseline_excludes_qc_generators():
+    """The manual plan is measured in sellable units, not sellable + QC.
+
+    Regression: the service used ``weekly_planned_production`` (commercial + QC).
+    Demand and the weekly ceilings are both sellable-only, so the QC units showed
+    up as phantom inventory and inflated the manual plan's penalty -- which in
+    turn inflated the reported saving by a large multiple.
+    """
+    T = PARAMS.horizon_weeks
+    planned = [0] * (T + 1)
+    planned[3] = 10
+    planned[8] = 10          # exactly matches the demand in _comparison_request
+    qc = [0] * (T + 1)
+    qc[3] = 4
+    qc[8] = 4                # 8 QC units that must not count as production
+
+    result = ComparisonService(FakeMasterPlannerReader(planned, qc=qc)).run(
+        _comparison_request())
+
+    assert result.baseline.total_planned == 20            # not 28
+    assert result.baseline.summary["total_penalty_cost"] == 0.0
+    assert not any("does not equal total" in w for w in result.warnings)
+    manual = result.weekly_comparison["Manual_Production"].tolist()
+    assert manual[2] == 10 and manual[7] == 10            # 0-indexed weeks 3 and 8
+
+
+def test_comparison_capacity_violation_ignores_qc_headroom():
+    """A week at capacity must not be flagged just because it also has QC units."""
+    T = PARAMS.horizon_weeks
+    planned = [0] * (T + 1)
+    planned[1] = PARAMS.overtime_max_good_week   # exactly at the ceiling (45)
+    qc = [0] * (T + 1)
+    qc[1] = 3                                    # would push it over if counted
+
+    result = ComparisonService(FakeMasterPlannerReader(planned, qc=qc)).run(
+        _comparison_request())
+
+    assert not any("exceeds weekly capacity" in w for w in result.warnings)
+    assert result.baseline.capacity_violations == []
 
 
 def test_comparison_service_overtime_counts_reported():

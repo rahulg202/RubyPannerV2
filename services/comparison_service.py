@@ -61,7 +61,14 @@ class ComparisonService:
                 f"{request.params.horizon_weeks}-week horizon and were excluded."
             )
 
-        planned = mp.weekly_planned_production
+        # Sellable units only. Demand and the 30/45 weekly ceilings are both
+        # expressed in sellable generators: a batch yields 16, one is destroyed
+        # for QC, 15 ship. Adding mp.weekly_qc here would compare production
+        # including the QC units against a demand and a capacity that exclude
+        # them, inventing phantom inventory and phantom capacity breaches.
+        # (domain.fixed_plan_onboarding takes weekly_commercial for the same
+        # reason.)
+        planned = mp.weekly_commercial
         demand = list(request.demand)
 
         baseline = compute_baseline_cost(

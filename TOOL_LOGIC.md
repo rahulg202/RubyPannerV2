@@ -70,6 +70,15 @@ correct.
 Columns whose header carries no account number receive a generated code
 (`RF-` + hash). That is 37 of your 203 columns.
 
+**The manual plan is read in sellable units.** When the Comparison tab evaluates
+your plan, a week's production is its `Total Commercial` figure — the same number
+you see on that row of the Master Planner. The `QC GEN` column is deliberately
+*not* added to it: demand and the 30/45 ceilings are both expressed in sellable
+generators (A1, A2), so a week showing 44 commercial + 3 QC is a week of 44
+against a ceiling of 45, not 47. You can check any row this way: pick a
+manufacturing date in the Comparison tab's weekly table and the *Manual*
+production column will equal `Total Commercial` on that row exactly.
+
 ### 2.2 What the tool derives per site
 
 From your 2026 data:
