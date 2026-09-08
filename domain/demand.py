@@ -103,13 +103,44 @@ def clean_sites(
             issues.append((-1, str(sid), "Duplicate Site_ID among active rows"))
         active = active[~active["site_id"].isin(dupes.unique())].copy()
 
+    active["next_demand_week"] = active["next_demand_week_num"].astype(int)
+    active["interval_weeks"] = active["interval_weeks_num"].astype(int)
+
+    # Shipping-restricted status: prefer the explicit column over inferring it.
+    #
+    # The Master Planner marks these sites by hand with a dark blue header fill,
+    # which the converter writes out as EU_Restricted. That marking is a business
+    # fact the planning team owns. Inferring the same thing from the site name is
+    # guesswork that cannot distinguish "New England, NH" from England, and it
+    # wrongly restricted two New Hampshire sites.
+    #
+    # Inference is kept only as a fallback for hand-maintained sheets that have no
+    # such column. Where both exist and disagree, the explicit value wins and the
+    # disagreement is reported, so a missed marking surfaces instead of silently
+    # dropping the constraint.
+    inferred = active["country"].isin(ROW_COUNTRIES)
+    if "eu_restricted" in active.columns:
+        explicit = (
+            active["eu_restricted"].astype(str).str.strip().str.upper()
+            .isin(["Y", "YES", "TRUE", "1"])
+        )
+        active["is_row"] = explicit
+        for idx, sid, exp, inf in zip(
+            active.index, active["site_id"], explicit, inferred
+        ):
+            if exp != inf:
+                issues.append((
+                    int(idx), str(sid),
+                    f"EU_Restricted is '{'Y' if exp else 'N'}' but the site name "
+                    f"reads as {'a restricted' if inf else 'a non-restricted'} "
+                    f"country; the explicit column was used. Confirm which is right"
+                ))
+    else:
+        active["is_row"] = inferred
+
     issues_df = pd.DataFrame(
         issues, columns=["row_index", "site_id", "issue"]
     ).sort_values(["issue", "site_id", "row_index"])
-
-    active["next_demand_week"] = active["next_demand_week_num"].astype(int)
-    active["interval_weeks"] = active["interval_weeks_num"].astype(int)
-    active["is_row"] = active["country"].isin(ROW_COUNTRIES)
 
     keep = ["site_id", "next_demand_week", "interval_weeks", "country", "is_row"]
     active = active[keep].reset_index(drop=True)

@@ -139,6 +139,42 @@ def test_missing_country_column_defaults_to_non_row():
     assert (active["country"] == "").all()
 
 
+def test_explicit_eu_restricted_column_overrides_the_country_guess():
+    """The workbook's own marking beats inferring the country from the name.
+
+    The planning team marks restricted sites by hand (dark blue header fill), and
+    that marking is a business fact. Name matching is a guess: it read two New
+    Hampshire "New England" sites as UK and put them under the shipping cap.
+    """
+    df = pd.DataFrame({
+        "site_id": ["KEEP", "DROP", "AGREE"],
+        "active": ["Y", "Y", "Y"],
+        "next_demand_week": [1, 2, 3],
+        "interval_weeks": [4, 4, 4],
+        # DROP looks Danish but is explicitly not restricted; KEEP is the reverse.
+        "country": ["usa", "denmark", "netherlands"],
+        "eu_restricted": ["Y", "N", "Y"],
+    })
+    active, issues = clean_sites(df, DEFAULT_PARAMS)
+
+    assert set(active[active["is_row"]]["site_id"]) == {"KEEP", "AGREE"}
+    # Both disagreements are surfaced rather than silently applied.
+    flagged = set(issues[issues["issue"].str.contains("EU_Restricted")]["site_id"])
+    assert flagged == {"KEEP", "DROP"}
+
+
+def test_country_guess_still_used_when_no_explicit_column():
+    df = pd.DataFrame({
+        "site_id": ["S1", "S2"],
+        "active": ["Y", "Y"],
+        "next_demand_week": [1, 2],
+        "interval_weeks": [4, 4],
+        "country": ["denmark", "usa"],
+    })
+    active, _ = clean_sites(df, DEFAULT_PARAMS)
+    assert set(active[active["is_row"]]["site_id"]) == {"S1"}
+
+
 def test_row_countries_identified_correctly():
     """clean_sites marks Denmark/UK/Netherlands/Sweden sites as ROW."""
     df = pd.DataFrame({
