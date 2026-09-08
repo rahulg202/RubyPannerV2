@@ -20,7 +20,13 @@ from services.dtos import OnboardingRequest
 from services.onboarding_service import MODE_FIXED, MODE_OPTIMIZE
 from ui import sidebar
 from ui import state as S
-from ui.formatting import XLSX_MIME, rankings_frame, usd_signed
+from ui.formatting import (
+    XLSX_MIME,
+    rankings_frame,
+    usd_signed,
+    week_date_map,
+    week_label,
+)
 
 BLANK_ROW = {
     "Site_ID": "",
@@ -351,9 +357,13 @@ def _render_fixed_rankings(result, customers) -> None:
         )
         return
 
+    dates = week_date_map(result.week_dates)
     rows = []
     for option in options:
-        row = {f"Week for {sid}": option.selected_weeks.get(sid) for sid in site_ids}
+        row = {
+            f"Week for {sid}": week_label(option.selected_weeks.get(sid), dates)
+            for sid in site_ids
+        }
         row.update({
             "Added cost": usd_signed(option.added_cost),
             "Generators": option.generators,
@@ -366,6 +376,11 @@ def _render_fixed_rankings(result, customers) -> None:
         rows.append(row)
 
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    if not dates:
+        st.caption(
+            "Set a reference week in **Settings** to see the date beside each "
+            "week number."
+        )
     st.caption(
         "Each row is one candidate start week. **Added cost** is what slotting "
         "the site in costs on top of your current "
@@ -384,8 +399,8 @@ def _render_fixed_rankings(result, customers) -> None:
             pd.DataFrame([
                 {
                     "Site_ID": p.site_id,
-                    "Due week": p.due_week,
-                    "Made in week": p.produced_week,
+                    "Due week": week_label(p.due_week, dates),
+                    "Made in week": week_label(p.produced_week, dates),
                     "Outcome": p.outcome,
                     "Cost": usd_signed(p.cost),
                     "Detail": p.detail,
@@ -470,7 +485,7 @@ def _render_rankings(result, customers) -> None:
                 st.info("No feasible options for this objective.")
                 continue
             st.dataframe(
-                rankings_frame(options, site_ids),
+                rankings_frame(options, site_ids, result.week_dates),
                 width="stretch", hide_index=True,
             )
             st.caption(
@@ -527,9 +542,11 @@ def _render_selection_and_file(service, result, customers) -> None:
         st.info("No feasible combination to select.")
         return
 
+    dates = week_date_map(result.week_dates)
+
     def _label(opt) -> str:
         weeks = ", ".join(
-            f"{sid} starts week {opt.selected_weeks[sid]}"
+            f"{sid} starts week {week_label(opt.selected_weeks[sid], dates)}"
             for sid in sorted(opt.selected_weeks)
         )
         effect = (
@@ -558,7 +575,7 @@ def _render_selection_and_file(service, result, customers) -> None:
         rows.append({
             "Customer": site_id,
             "Name": (cust.site_name if cust else "") or "—",
-            "First generator due": f"week {week}",
+            "First generator due": f"week {week_label(week, dates)}",
             "Then every": f"{cust.interval_weeks} weeks" if cust else "—",
             "Country": (cust.country if cust else "") or "—",
         })

@@ -423,6 +423,11 @@ the tool generates an updated input file with the new sites already in it, ready
 the Cost Optimizer. Existing rows are copied through untouched; new rows are flagged
 `Is_New = Y`.
 
+Every week shown in the results carries its start date — `3 — 19 Jan 2026` — in the
+rankings, the placements and the selection summary, so you never have to translate a
+week number in your head. Without a reference week set you get the bare number,
+because there is no anchor to date it against.
+
 ### The two modes
 
 They answer different questions, and they can disagree. Both answers are valid.

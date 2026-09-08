@@ -248,3 +248,68 @@ def test_blank_rows_are_still_skipped():
 
     frame = pd.concat([_frame(), _frame(Site_ID="")], ignore_index=True)
     assert len(_to_customers(frame, None, 52)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Week numbers in output tables carry their date
+# ---------------------------------------------------------------------------
+
+def test_week_date_map_from_result_triples():
+    from ui.formatting import week_date_map
+
+    triples = [(1, MONDAY, date(2026, 1, 9)), (2, date(2026, 1, 12), None)]
+    assert week_date_map(triples) == {1: MONDAY, 2: date(2026, 1, 12)}
+
+
+def test_week_date_map_is_empty_without_a_reference_week():
+    from ui.formatting import week_date_map
+
+    assert week_date_map([]) == {}
+    assert week_date_map(None) == {}
+
+
+def test_week_label_shows_the_date_when_known():
+    from ui.formatting import week_label
+
+    assert week_label(1, {1: MONDAY}) == "1 — 05 Jan 2026"
+
+
+def test_week_label_falls_back_to_the_bare_number():
+    """Without an anchor there is no date, and none is invented."""
+    from ui.formatting import week_label
+
+    assert week_label(5, {}) == "5"
+    assert week_label(5, {1: MONDAY}) == "5"
+
+
+def test_week_label_handles_a_missing_week():
+    from ui.formatting import week_label
+
+    assert week_label(None, {1: MONDAY}) == "—"
+
+
+class _Option:
+    """Minimal stand-in for a ranked onboarding combination."""
+
+    def __init__(self, week):
+        self.selected_weeks = {"NEW-1": week}
+        self.delta_penalty = 0.0
+        self.delta_overtime = 0.0
+        self.delta_capacity = -15000.0
+        self.delta_composite = -15000.0
+        self.overtime_weeks = 0
+
+
+def test_rankings_frame_dates_the_week_column():
+    from ui.formatting import rankings_frame
+
+    frame = rankings_frame([_Option(3)], ["NEW-1"],
+                           [(3, date(2026, 1, 19), None)])
+    assert frame.loc[0, "NEW-1 week"] == "3 — 19 Jan 2026"
+
+
+def test_rankings_frame_without_dates_shows_the_number():
+    from ui.formatting import rankings_frame
+
+    frame = rankings_frame([_Option(3)], ["NEW-1"], None)
+    assert frame.loc[0, "NEW-1 week"] == "3"

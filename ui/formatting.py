@@ -143,13 +143,18 @@ def comparison_frame(components: Sequence[dict]) -> pd.DataFrame:
     ])
 
 
-def rankings_frame(options: Sequence, site_ids: Sequence[str]) -> pd.DataFrame:
+def rankings_frame(
+    options: Sequence,
+    site_ids: Sequence[str],
+    week_dates: Sequence[tuple] | None = None,
+) -> pd.DataFrame:
     """Render ranked onboarding combinations, one column per new customer."""
+    dates = week_date_map(week_dates)
     rows = []
     for rank, opt in enumerate(options, start=1):
         row = {"Rank": rank}
         for sid in site_ids:
-            row[f"{sid} week"] = opt.selected_weeks.get(sid)
+            row[f"{sid} week"] = week_label(opt.selected_weeks.get(sid), dates)
         row.update({
             "Δ Penalty": usd_signed(opt.delta_penalty),
             "Δ Overtime": usd_signed(opt.delta_overtime),
@@ -172,3 +177,29 @@ def week_option_label(week: int, week_dates: dict) -> str:
     if mfg is None:
         return f"Week {week}"
     return f"Week {week} — {mfg:%d %b %Y}"
+
+
+def week_date_map(week_dates: Sequence[tuple] | None) -> dict:
+    """Turn ``(week, mfg_date, cal_date)`` triples into ``{week: mfg_date}``.
+
+    Accepts the ``week_dates`` carried on the result objects, which is empty when
+    no reference week has been set.
+    """
+    if not week_dates:
+        return {}
+    return {week: mfg for week, mfg, *_rest in week_dates}
+
+
+def week_label(week, dates: dict) -> str:
+    """A week number with its start date beside it, when one is known.
+
+    A bare week number is only meaningful relative to an anchor the reader has to
+    remember. Where a reference week has been set the date is known, so it is shown
+    — and where it has not, the number is all there is and nothing is invented.
+    """
+    if week is None:
+        return "—"
+    mfg = dates.get(int(week))
+    if mfg is None:
+        return str(int(week))
+    return f"{int(week)} — {mfg:%d %b %Y}"
