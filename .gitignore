@@ -61,3 +61,7 @@ sites_clean.csv
 # Generated documentation artefact, rebuilt from USER_GUIDE.md as needed.
 USER_GUIDE.pdf
 *.pdf
+
+# Customer test files supplied for debugging — never commit
+Nouveau dossier/
+sites_input_test.xlsx

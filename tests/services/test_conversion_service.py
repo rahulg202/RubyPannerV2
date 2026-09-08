@@ -166,3 +166,61 @@ def test_horizon_defaults_to_52(service_and_fake):
     service, fake = service_and_fake
     service.run(ConversionRequest(master_planner_bytes=b"XLSX"))
     assert fake.calls[0][2] == 52
+
+
+# ---------------------------------------------------------------------------
+# The annotated Master Planner copy is produced on request, not eagerly
+# ---------------------------------------------------------------------------
+
+class RecordingAnnotator:
+    """Counts calls, so eager annotation would be visible."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def annotate(self, source, sites, sheet="Schedule"):
+        self.calls += 1
+
+        class _Result:
+            xlsx_bytes = b"ANNOTATED"
+            written_count = len(
+                [s for s in sites if s.code_source == "generated"]
+            )
+
+        return _Result()
+
+
+def test_run_does_not_annotate_the_workbook():
+    """Rewriting a 21 MB planner costs tens of seconds and hundreds of MB.
+
+    Most imports never download the annotated copy, so paying that on every run
+    made the whole tab unusable on a large workbook.
+    """
+    annotator = RecordingAnnotator()
+    service = ConversionService(
+        converter=FakeConverter(_derived(STANDARD_COLUMNS)), annotator=annotator
+    )
+    result = service.run(ConversionRequest(master_planner_bytes=b"XLSX"))
+
+    assert annotator.calls == 0
+    # It still reports how many codes *would* be written, so the UI can offer it.
+    assert result.codes_written == 1
+    assert result.derived_sites
+
+
+def test_annotate_is_available_on_demand():
+    annotator = RecordingAnnotator()
+    service = ConversionService(
+        converter=FakeConverter(_derived(STANDARD_COLUMNS)), annotator=annotator
+    )
+    result = service.run(ConversionRequest(master_planner_bytes=b"XLSX"))
+
+    annotation = service.annotate(b"XLSX", result.derived_sites)
+    assert annotator.calls == 1
+    assert annotation.xlsx_bytes == b"ANNOTATED"
+
+
+def test_annotate_without_an_annotator_is_a_clear_error():
+    service = ConversionService(converter=FakeConverter(_derived(STANDARD_COLUMNS)))
+    with pytest.raises(RuntimeError, match="annotator"):
+        service.annotate(b"XLSX", [])

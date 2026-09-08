@@ -178,9 +178,29 @@ def test_weeks_beyond_the_horizon_are_ignored():
     assert alpha.deliveries == 2
 
 
-def test_missing_sheet_is_rejected(workbook_bytes):
-    with pytest.raises(ValueError, match="not found"):
-        MasterPlannerConverter().convert(workbook_bytes, sheet="Nope")
+def test_a_wrong_sheet_falls_back_to_the_schedule_grid(workbook_bytes):
+    """Matches the reader: name the wrong sheet and it still finds the grid.
+
+    The real workbook has nine sheets. A planner pointed at a summary sheet used
+    to get "Could not locate the 'Weeks #' column", which said nothing about what
+    to do next.
+    """
+    derived = MasterPlannerConverter().convert(
+        workbook_bytes, sheet="Nope", horizon_weeks=30
+    )
+    assert derived.sites
+    assert any("Read 'Schedule' instead" in w for w in derived.warnings)
+
+
+def test_a_workbook_with_no_schedule_grid_is_rejected(workbook_bytes):
+    wb = openpyxl.Workbook()
+    wb.active.title = "Summary"
+    wb.active.append(["Not", "a", "schedule"])
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    with pytest.raises(ValueError, match="Weeks #"):
+        MasterPlannerConverter().convert(buffer.getvalue())
 
 
 def test_module_level_wrapper(workbook_bytes):

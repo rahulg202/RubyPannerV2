@@ -201,7 +201,8 @@ class ConversionResult:
     anchor_date: date | None = None
     anchor_description: str = ""
     weeks_available: int = 0
-    # A copy of the Master Planner with generated codes written into the headers,
-    # so the codes survive header edits instead of depending on a text hash.
-    annotated_planner_bytes: bytes | None = None
+    # How many columns would gain a code if the annotated copy were requested.
     codes_written: int = 0
+    # Derived sites, kept so the annotated Master Planner copy can be produced on
+    # demand rather than on every conversion.
+    derived_sites: list = field(default_factory=list)

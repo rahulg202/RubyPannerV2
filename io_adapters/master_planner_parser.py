@@ -190,22 +190,37 @@ class MasterPlannerParser:
             between the input file and this comparison.
         """
         wb = openpyxl.load_workbook(io.BytesIO(source), data_only=True, read_only=True)
+        sheet_note: str | None = None
         try:
-            if sheet not in wb.sheetnames:
-                raise ValueError(
-                    f"Sheet '{sheet}' not found. Available: {wb.sheetnames}"
-                )
-            ws = wb[sheet]
-            rows = list(ws.iter_rows(min_row=1, values_only=True))
+            resolved, sheet_note = self._resolve_sheet(wb, sheet)
+            ws = wb[resolved]
+            # Only rows carrying a week number can contribute; the planner's sheet
+            # is mostly empty padding, so discarding the rest while streaming keeps
+            # memory flat on a large workbook.
+            header: tuple | None = None
+            rows: list[tuple] = []
+            sheet_rows: list[int] = []
+            for index, row in enumerate(ws.iter_rows(values_only=True), start=1):
+                if index < HEADER_ROW:
+                    continue
+                if index == HEADER_ROW:
+                    header = row
+                    continue
+                week, ok = _to_int(row[0]) if row else (0, False)
+                if ok and week > 0:
+                    rows.append(row)
+                    # Real spreadsheet row, kept so week_to_row stays meaningful
+                    # now that empty rows are skipped rather than counted.
+                    sheet_rows.append(index)
         finally:
             wb.close()
 
-        if len(rows) < HEADER_ROW:
+        if header is None:
             raise ValueError("Master Planner sheet has no header row.")
-
-        header = rows[HEADER_ROW - 1]
         col_index = self._locate_columns(header)
         data = MasterPlannerData()
+        if sheet_note:
+            data.issues.append(sheet_note)
 
         # Identify customer columns and their identifiers
         customer_cols: dict[int, str] = {}
@@ -240,7 +255,9 @@ class MasterPlannerParser:
             data.customer_headers.setdefault(site_id, text)
 
         # Choose the year window
-        body = rows[HEADER_ROW:]
+        # ``rows`` already excludes the header and every row without a week
+        # number, so it is the body.
+        body = rows
         # Two ways to map sheet rows onto planning weeks. Anchoring to a
         # reference week takes precedence: it is explicit, it crosses calendar
         # years, and it is what the converter uses.
@@ -306,7 +323,7 @@ class MasterPlannerParser:
                 continue  # first matching row for this week wins
             seen_weeks.add(week_val)
 
-            data.week_to_row[week_val] = HEADER_ROW + offset + 1
+            data.week_to_row[week_val] = sheet_rows[offset]
             data.mfg_dates[week_val] = mfg
             if col_index.get("cal") is not None:
                 data.cal_dates[week_val] = _to_date(row[col_index["cal"]])
@@ -368,6 +385,54 @@ class MasterPlannerParser:
         if "weeks" not in found:
             raise ValueError("Could not locate the 'Weeks #' column in the header row.")
         return found
+
+    @staticmethod
+    def _has_week_column(ws) -> bool:
+        """True when this worksheet's header row carries a 'Weeks #' column."""
+        try:
+            for index, row in enumerate(ws.iter_rows(values_only=True), start=1):
+                if index == HEADER_ROW:
+                    return any(
+                        value is not None and _normalize(value).startswith("weeks")
+                        for value in row
+                    )
+                if index > HEADER_ROW:
+                    break
+        except Exception:  # noqa: BLE001 - an unreadable sheet simply is not it
+            return False
+        return False
+
+    @classmethod
+    def _resolve_sheet(cls, wb, requested: str) -> tuple[str, str | None]:
+        """Return the sheet to read, plus a note when it is not the one asked for.
+
+        A planner can end up pointing at a summary sheet — the workbook has nine,
+        and only one is the schedule grid. Rather than failing on a sheet that
+        could never have worked, find the one that can and say so. Failing outright
+        is reserved for the case where no sheet qualifies.
+        """
+        if requested in wb.sheetnames and cls._has_week_column(wb[requested]):
+            return requested, None
+
+        for name in wb.sheetnames:
+            if name != requested and cls._has_week_column(wb[name]):
+                if requested in wb.sheetnames:
+                    note = (
+                        f"Sheet '{requested}' has no 'Weeks #' column, so it is not "
+                        f"the schedule grid. Read '{name}' instead."
+                    )
+                else:
+                    note = (
+                        f"Sheet '{requested}' was not found. Read '{name}' instead."
+                    )
+                return name, note
+
+        raise ValueError(
+            f"No sheet in this workbook has a 'Weeks #' column in row "
+            f"{HEADER_ROW}, so none of them is a Master Planner schedule grid. "
+            f"Sheets found: {', '.join(wb.sheetnames)}. Check that you uploaded "
+            f"the Master Planner and not another workbook."
+        )
 
     @staticmethod
     def _pick_year(body: list[tuple], col_index: dict[str, int]) -> int | None:

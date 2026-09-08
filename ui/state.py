@@ -30,12 +30,13 @@ OB_CUSTOMERS = "ob_customers"
 OB_SELECTION = "ob_selection"
 OB_GENERATED = "ob_generated_file"
 CONV_RESULT = "conv_result"
+CONV_ANNOTATED = "conv_annotated_planner"
 
 ALL_KEYS = [
     SITES_BYTES, SITES_NAME, SITES_SHEETS, SITES_SHEET,
     MP_BYTES, MP_NAME, MP_SHEETS, MP_SHEET,
     OPT_RESULT, CMP_RESULT, OB_RESULT, OB_CUSTOMERS, OB_SELECTION, OB_GENERATED,
-    CONV_RESULT,
+    CONV_RESULT, CONV_ANNOTATED,
 ]
 
 
@@ -62,5 +63,5 @@ def raw_settings(session: Any, defaults: dict) -> dict:
 def clear_results(session: Any) -> None:
     """Drop derived results — called when inputs or settings change."""
     for key in (OPT_RESULT, CMP_RESULT, OB_RESULT, OB_SELECTION, OB_GENERATED,
-                CONV_RESULT):
+                CONV_RESULT, CONV_ANNOTATED):
         session[key] = None

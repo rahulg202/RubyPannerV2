@@ -131,7 +131,7 @@ def _render_metrics(result) -> None:
     )
 
 
-def _render_result(result) -> None:
+def _render_result(result, service) -> None:
     st.divider()
     st.markdown("### Generated input file")
 
@@ -148,16 +148,41 @@ def _render_result(result) -> None:
         key="conv_download",
         type="primary",
     )
-    if result.annotated_planner_bytes and result.codes_written:
-        st.download_button(
-            f"Download Master Planner with {result.codes_written} code(s) added",
-            data=result.annotated_planner_bytes,
-            file_name=ANNOTATED_FILENAME,
-            mime=XLSX_MIME,
-            key="conv_download_annotated",
-            help="A copy of your workbook with the generated codes written into "
-                 "the column headers. Your original file is not changed.",
-        )
+    if result.codes_written:
+        # Built on request: rewriting a large planner is slow and memory-hungry,
+        # and most imports never need it.
+        if st.button(
+            f"Prepare Master Planner with {result.codes_written} code(s) added",
+            key="conv_make_annotated",
+            help="Writes the generated codes into a copy of your workbook. Your "
+                 "original file is not changed. Can take a minute on a large "
+                 "planner.",
+        ):
+            with st.spinner("Writing codes into a copy of your workbook..."):
+                try:
+                    annotation = service.annotate(
+                        st.session_state[S.MP_BYTES],
+                        result.derived_sites,
+                        st.session_state.get(S.MP_SHEET) or "Schedule",
+                    )
+                    st.session_state[S.CONV_ANNOTATED] = annotation.xlsx_bytes
+                except (RubyFillError, ValueError, RuntimeError) as exc:
+                    st.error(f"Could not prepare the annotated copy: {exc}")
+                except MemoryError:
+                    st.error(
+                        "Ran out of memory writing the copy. This workbook is "
+                        "large; the Site_Mapping sheet in the input file lists "
+                        "the same codes if you would rather paste them in by hand."
+                    )
+
+        if st.session_state.get(S.CONV_ANNOTATED):
+            st.download_button(
+                "Download Master Planner with site codes",
+                data=st.session_state[S.CONV_ANNOTATED],
+                file_name=ANNOTATED_FILENAME,
+                mime=XLSX_MIME,
+                key="conv_download_annotated",
+            )
         st.caption(
             f"**Worth doing once.** {result.codes_written} of your Master Planner "
             f"columns have no account number, so their code is currently derived "
@@ -256,6 +281,7 @@ def render(conversion_service, settings_or_error) -> None:
         with st.spinner("Reading the manual plan and deriving sites..."):
             try:
                 st.session_state[S.CONV_RESULT] = conversion_service.run(request)
+                st.session_state[S.CONV_ANNOTATED] = None
             except RubyFillError as exc:
                 st.error(str(exc))
                 return
@@ -265,4 +291,4 @@ def render(conversion_service, settings_or_error) -> None:
 
     result = st.session_state.get(S.CONV_RESULT)
     if result is not None:
-        _render_result(result)
+        _render_result(result, conversion_service)

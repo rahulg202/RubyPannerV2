@@ -325,7 +325,8 @@ def _render_fixed_rankings(result, customers) -> None:
 
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
     st.caption(
-        "**Added cost** is what slotting the site in costs on top of your current "
+        "Each row is one candidate start week. **Added cost** is what slotting "
+        "the site in costs on top of your current "
         "plan: a third batch where a week is full, or holding cost where a "
         "generator has to be built early. Zero means it fits with no disruption. "
         "**Absorbed by existing overtime** means the week already runs a third "
@@ -353,92 +354,43 @@ def _render_fixed_rankings(result, customers) -> None:
         )
 
 
-def _render_rankings(result, customers) -> None:
-    site_ids = [c.site_id for c in customers]
-    tabs = st.tabs([OBJECTIVE_LABELS[k] for k in ("penalty", "overtime", "capacity")])
-    for tab, objective in zip(tabs, ("penalty", "overtime", "capacity")):
-        with tab:
-            options = result.rankings.get(objective, [])
-            if not options:
-                st.info("No feasible options for this objective.")
-                continue
-            st.dataframe(
-                rankings_frame(options, site_ids),
-                width="stretch", hide_index=True,
-            )
-            st.caption(
-                "Each row is one set of start weeks. The **Δ** columns show how "
-                "the whole 52-week plan's cost changes if you onboard on those "
-                "weeks, compared with today's plan of existing customers only. "
-                "**Negative means cheaper.** Rows are ordered best-first for this "
-                "objective."
-            )
+def _render_selection_metrics(selected, fixed_mode: bool) -> None:
+    """Summarise the chosen option, in the terms of the mode that produced it.
 
-
-def _cost_effect(delta: float) -> str:
-    """Plain-language effect of a combination on total plan cost."""
-    if delta < 0:
-        return f"saves {usd_signed(abs(delta))}"
-    if delta > 0:
-        return f"costs {usd_signed(delta)} more"
-    return "no change in cost"
-
-
-def _render_selection_and_file(service, result, customers) -> None:
-    st.divider()
-    st.markdown("### Confirm a selection and generate the input file")
-    st.caption(
-        "Pick the start weeks you want to commit to. The tool then writes a new "
-        "sites file with these customers added, ready to upload in the Cost "
-        "Optimizer tab."
-    )
-
-    # Gather every distinct combination that appeared in any ranking. Fixed-plan
-    # mode ranks on a single measure, so its options are already a flat list.
-    seen: dict[tuple, object] = {}
-    if getattr(result, "mode", MODE_OPTIMIZE) == MODE_FIXED:
-        for opt in result.fixed_rankings:
-            seen.setdefault(opt.key(), opt)
-    else:
-        for options in result.rankings.values():
-            for opt in options:
-                seen.setdefault(opt.key(), opt)
-    combos = list(seen.values())
-    if not combos:
-        st.info("No feasible combination to select.")
-        return
-
-    def _label(opt) -> str:
-        weeks = ", ".join(
-            f"{sid} starts week {opt.selected_weeks[sid]}"
-            for sid in sorted(opt.selected_weeks)
+    The two modes measure different things, so they cannot share one set of
+    metrics. Re-planning mode reports deltas against a re-optimized baseline;
+    fixed mode reports what accommodating the site adds to an unchanged plan and
+    has no capacity delta at all, because the plan's utilisation does not move.
+    """
+    if fixed_mode:
+        cols = st.columns(4)
+        cols[0].metric("Added cost", usd_signed(selected.added_cost),
+                       help="What slotting these customers into your existing "
+                            "plan costs. Zero means they fit with no disruption.")
+        cols[1].metric("Overtime", usd_signed(selected.overtime_cost),
+                       help="Third batches needed in weeks that were already full.")
+        cols[2].metric("Holding", usd_signed(selected.holding_cost),
+                       help="Cost of building a generator early and holding it "
+                            "because its own week was full.")
+        cols[3].metric(
+            "Fits with no disruption",
+            "Yes" if selected.fits_cleanly else "No",
+            help="Yes when every generator dropped into spare capacity without "
+                 "extra overtime or holding.",
         )
-        return f"{weeks}  —  {_cost_effect(opt.delta_composite)}"
-
-    choice = st.selectbox(
-        "Start weeks to apply", options=list(range(len(combos))),
-        format_func=lambda i: _label(combos[i]), key="ob_selection_choice",
-        help="Each option is a set of start weeks, one per new customer, with its "
-             "effect on the total cost of the 52-week plan.",
-    )
-    selected = combos[choice]
-    st.session_state[S.OB_SELECTION] = selected.selected_weeks
-
-    # Spell out what the chosen option actually means.
-    st.markdown("**This selection**")
-    rows = []
-    by_id = {c.site_id: c for c in customers}
-    for site_id in sorted(selected.selected_weeks):
-        week = selected.selected_weeks[site_id]
-        cust = by_id.get(site_id)
-        rows.append({
-            "Customer": site_id,
-            "Name": (cust.site_name if cust else "") or "—",
-            "First generator due": f"week {week}",
-            "Then every": f"{cust.interval_weeks} weeks" if cust else "—",
-            "Country": (cust.country if cust else "") or "—",
-        })
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+        if selected.fits_cleanly:
+            st.caption(
+                "Every generator fits into capacity your plan already has, so "
+                "nothing else in the plan needs to move."
+            )
+        else:
+            st.caption(
+                f"Accommodating these customers costs "
+                f"**{usd_signed(selected.added_cost)}** on top of your current "
+                f"plan. Unused-capacity cost is not included — your plan is fixed, "
+                f"so its utilisation does not change."
+            )
+        return
 
     cols = st.columns(4)
     cols[0].metric("Effect on total cost", usd_signed(selected.delta_composite),
@@ -465,7 +417,125 @@ def _render_selection_and_file(service, result, customers) -> None:
             "weeks, so overtime or early build-up is needed."
         )
 
-    if st.button("Generate optimizer input file", type="primary", key="ob_generate"):
+
+def _render_rankings(result, customers) -> None:
+    site_ids = [c.site_id for c in customers]
+    tabs = st.tabs([OBJECTIVE_LABELS[k] for k in ("penalty", "overtime", "capacity")])
+    for tab, objective in zip(tabs, ("penalty", "overtime", "capacity")):
+        with tab:
+            options = result.rankings.get(objective, [])
+            if not options:
+                st.info("No feasible options for this objective.")
+                continue
+            st.dataframe(
+                rankings_frame(options, site_ids),
+                width="stretch", hide_index=True,
+            )
+            st.caption(
+                "Each row is one set of start weeks. The **Δ** columns show how "
+                "the whole 52-week plan's cost changes if you onboard on those "
+                "weeks, compared with today's plan of existing customers only. "
+                "They are **year totals, not figures for the start week named in "
+                "the row.** Negative means cheaper. Rows are ordered best-first "
+                "for this objective."
+            )
+            if objective == "capacity":
+                st.caption(
+                    "**Δ capacity is normally negative, and that is expected.** "
+                    "Each generator the new site needs takes a production slot "
+                    "that would otherwise have sat idle, and idle slots are "
+                    "charged — so a site needing 7 generators over the year "
+                    "typically shows about 7 × the capacity rate as a saving. "
+                    "Weeks already at or above the normal ceiling contribute "
+                    "nothing here, because they had no idle slot to fill."
+                )
+
+
+def _cost_effect(delta: float) -> str:
+    """Plain-language effect of a combination on total plan cost."""
+    if delta < 0:
+        return f"saves {usd_signed(abs(delta))}"
+    if delta > 0:
+        return f"costs {usd_signed(delta)} more"
+    return "no change in cost"
+
+
+def _render_selection_and_file(service, result, customers) -> None:
+    st.divider()
+    st.markdown("### Confirm a selection and generate the input file")
+    st.caption(
+        "Pick the start weeks you want to commit to. The tool then writes a new "
+        "sites file with these customers added, ready to upload in the Cost "
+        "Optimizer tab."
+    )
+
+    # Gather every distinct combination that appeared in any ranking. Fixed-plan
+    # mode ranks on a single measure, so its options are already a flat list.
+    fixed_mode = getattr(result, "mode", MODE_OPTIMIZE) == MODE_FIXED
+    seen: dict[tuple, object] = {}
+    if fixed_mode:
+        for opt in result.fixed_rankings:
+            seen.setdefault(opt.key(), opt)
+    else:
+        for options in result.rankings.values():
+            for opt in options:
+                seen.setdefault(opt.key(), opt)
+    combos = list(seen.values())
+    if not combos:
+        st.info("No feasible combination to select.")
+        return
+
+    def _label(opt) -> str:
+        weeks = ", ".join(
+            f"{sid} starts week {opt.selected_weeks[sid]}"
+            for sid in sorted(opt.selected_weeks)
+        )
+        effect = (
+            f"adds {usd_signed(opt.added_cost)}" if fixed_mode
+            else _cost_effect(opt.delta_composite)
+        )
+        return f"{weeks}  —  {effect}"
+
+    choice = st.selectbox(
+        "Start weeks to apply", options=list(range(len(combos))),
+        format_func=lambda i: _label(combos[i]),
+        key=f"ob_selection_choice_{'fixed' if fixed_mode else 'optimize'}",
+        help="Each option is a set of start weeks, one per new customer, with its "
+             "cost effect.",
+    )
+    selected = combos[choice]
+    st.session_state[S.OB_SELECTION] = selected.selected_weeks
+
+    # Spell out what the chosen option actually means.
+    st.markdown("**This selection**")
+    rows = []
+    by_id = {c.site_id: c for c in customers}
+    for site_id in sorted(selected.selected_weeks):
+        week = selected.selected_weeks[site_id]
+        cust = by_id.get(site_id)
+        rows.append({
+            "Customer": site_id,
+            "Name": (cust.site_name if cust else "") or "—",
+            "First generator due": f"week {week}",
+            "Then every": f"{cust.interval_weeks} weeks" if cust else "—",
+            "Country": (cust.country if cust else "") or "—",
+        })
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+    _render_selection_metrics(selected, fixed_mode)
+
+    have_sites = st.session_state.get(S.SITES_BYTES) is not None
+    if not have_sites:
+        # Fixed mode only requires the Master Planner to produce a ranking, but
+        # writing the input file needs the existing sites to append to.
+        st.info(
+            "To generate an input file, upload your current sites file in the "
+            "**Cost Optimizer** tab. The recommendation above does not need it, "
+            "but the generated file is your existing sites plus the new ones."
+        )
+
+    if st.button("Generate optimizer input file", type="primary",
+                 key="ob_generate", disabled=not have_sites):
         try:
             data = service.generate_input_file(
                 st.session_state[S.SITES_BYTES],

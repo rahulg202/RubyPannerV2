@@ -141,9 +141,44 @@ def test_weeks_outside_horizon_excluded(fixture_bytes):
     assert d.rows_excluded >= 1
 
 
-def test_missing_sheet_raises(fixture_bytes):
-    with pytest.raises(ValueError, match="not found"):
-        parse_master_planner(fixture_bytes, sheet="NoSuchSheet")
+def test_a_wrong_sheet_falls_back_to_the_schedule_grid(fixture_bytes):
+    """A planner pointed at the wrong sheet should still get a result.
+
+    The real workbook has nine sheets and only one is the schedule grid. Failing
+    on a sheet that could never have worked produced an error the planner could
+    not act on, so the reader now finds the sheet that qualifies and says so.
+    """
+    d = parse_master_planner(fixture_bytes, sheet="NoSuchSheet")
+    assert d.customer_schedule                      # it read the real grid
+    assert any("Read 'Schedule' instead" in i for i in d.issues)
+
+
+def test_a_workbook_with_no_schedule_grid_is_rejected_with_the_sheet_names():
+    """When no sheet qualifies, say so and list what was actually there."""
+    import io as _io
+
+    import openpyxl as _openpyxl
+
+    wb = _openpyxl.Workbook()
+    wb.active.title = "Summary"
+    wb.active.append(["Not", "a", "schedule"])
+    wb.create_sheet("Notes")
+    buffer = _io.BytesIO()
+    wb.save(buffer)
+
+    with pytest.raises(ValueError) as exc:
+        parse_master_planner(buffer.getvalue())
+    message = str(exc.value)
+    assert "Weeks #" in message
+    assert "Summary" in message and "Notes" in message
+
+
+def test_week_to_row_points_at_real_spreadsheet_rows(fixture_bytes):
+    """Empty rows are skipped while streaming, so this must not count positions."""
+    d = parse_master_planner(fixture_bytes, horizon_weeks=52)
+    # Fixture data starts on row 3, one week per row.
+    assert d.week_to_row[1] == 3
+    assert d.week_to_row[2] == 4
 
 
 def test_parser_class_and_function_agree(fixture_bytes):
@@ -191,3 +226,56 @@ def test_explicit_generated_code_in_a_header_is_used_verbatim():
     # It is an explicit identifier, so it is not reported as newly assigned.
     assert not any(a.generated_id == "RF-4e40dfd2" for a in parsed.assigned_ids)
     assert parsed.customer_headers["RF-4e40dfd2"] == header
+
+
+# ---------------------------------------------------------------------------
+# Streaming: empty padding rows must not be retained
+# ---------------------------------------------------------------------------
+
+def _padded_workbook(padding_rows: int = 3000) -> bytes:
+    """A small schedule followed by thousands of empty rows.
+
+    The real planner extends to 15,300 rows of which only ~500 carry a week
+    number. Holding a cell object per cell cost 2 GB of peak memory and got the
+    hosted app killed, so the reader must stream and discard.
+    """
+    import io as _io
+    from datetime import datetime
+
+    import openpyxl as _openpyxl
+
+    wb = _openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Schedule"
+    ws.append([None] * 12)
+    ws.append([
+        "Weeks #", "MFG Date", "Calibration date", "Problem?", "Month", "FY",
+        "US Demand", "RoW Demand", "Total Commercial", "QC GEN", "US STAB",
+        "00449    Alpha Care, CA (7)",
+    ])
+    monday = datetime(2026, 1, 5)
+    for week in range(1, 4):
+        mfg = datetime.fromordinal(monday.toordinal() + 7 * (week - 1))
+        ws.append([week, mfg, mfg, None, "Jan", 2026, 1, 0, 1, 1, None, 1])
+    for _ in range(padding_rows):
+        ws.append([None] * 12)
+
+    buffer = _io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def test_empty_padding_rows_are_discarded_while_streaming():
+    data = _padded_workbook(3000)
+    parsed = parse_master_planner(data, horizon_weeks=52)
+
+    # Only the three real weeks are kept, regardless of how far the sheet runs.
+    assert sorted(parsed.week_to_row) == [1, 2, 3]
+    assert parsed.rows_excluded == 0
+    assert sum(parsed.customer_schedule["00449"]) == 3
+
+
+def test_padding_does_not_shift_the_row_mapping():
+    data = _padded_workbook(500)
+    parsed = parse_master_planner(data, horizon_weeks=52)
+    assert parsed.week_to_row[1] == 3      # real spreadsheet row, not a position

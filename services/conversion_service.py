@@ -37,6 +37,28 @@ class ConversionService:
         self._converter = converter
         self._annotator = annotator
 
+    def annotate(
+        self,
+        master_planner_bytes: bytes,
+        sites: list,
+        sheet: str = "Schedule",
+    ):
+        """Return a copy of the Master Planner with generated codes in the headers.
+
+        Separate from :meth:`run` because it is the expensive part: writing the
+        workbook back out means holding all of it in memory, which on a large
+        planner costs far more than the conversion itself. Called only when the
+        planner asks for the file.
+
+        Raises
+        ------
+        RuntimeError
+            If no annotator was injected.
+        """
+        if self._annotator is None:
+            raise RuntimeError("No Master Planner annotator configured.")
+        return self._annotator.annotate(master_planner_bytes, sites, sheet)
+
     def run(self, request: ConversionRequest) -> ConversionResult:
         """Convert the manual plan into an uploadable input file.
 
@@ -83,31 +105,16 @@ class ConversionService:
                 f"Site_Mapping sheet before optimizing."
             )
 
-        # Write the generated codes into a copy of the Master Planner, so the
-        # link between the two files stops depending on the header text staying
-        # byte-identical. Failure here must not lose the conversion itself.
-        annotated_bytes = None
-        codes_written = 0
-        if self._annotator is not None and derived.generated_codes:
-            try:
-                annotation = self._annotator.annotate(
-                    request.master_planner_bytes,
-                    derived.sites,
-                    request.master_planner_sheet,
-                )
-                annotated_bytes = annotation.xlsx_bytes
-                codes_written = annotation.written_count
-            except Exception as exc:  # noqa: BLE001 - reported, not fatal
-                warnings.append(
-                    f"Could not produce an annotated Master Planner copy: {exc}"
-                )
-
+        # The annotated Master Planner copy is produced on request, not here.
+        # Rewriting a 21 MB workbook costs tens of seconds and hundreds of
+        # megabytes, and most conversions never download it — doing it eagerly
+        # made every import pay that price.
         return ConversionResult(
             sites_df=sites_df,
             mapping_df=mapping_frame(derived.sites),
             notes_df=notes_frame(derived.sites),
-            annotated_planner_bytes=annotated_bytes,
-            codes_written=codes_written,
+            codes_written=len(derived.generated_codes),
+            derived_sites=list(derived.sites),
             anchor_date=getattr(derived, "anchor_date", None),
             anchor_description=getattr(derived, "anchor_description", "") or "",
             weeks_available=getattr(derived, "weeks_available", 0),
