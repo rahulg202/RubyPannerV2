@@ -81,11 +81,15 @@ class FakeMasterPlannerData:
 
 
 class FakeMasterPlannerReader:
-    def __init__(self, planned=None, schedule=None, raise_exc: Exception | None = None):
+    def __init__(self, planned=None, schedule=None, raise_exc: Exception | None = None,
+                 mfg_dates=None, cal_dates=None):
         T = PARAMS.horizon_weeks
         self.planned = planned if planned is not None else [0] * (T + 1)
         self.schedule = schedule or {}
         self.raise_exc = raise_exc
+        # Optional dates, for callers checking that weeks can be shown as dates.
+        self.mfg_dates = mfg_dates
+        self.cal_dates = cal_dates
         self.calls = 0
 
     def parse(self, source, sheet="Schedule", horizon_weeks=52, year=None,
@@ -93,7 +97,12 @@ class FakeMasterPlannerReader:
         self.calls += 1
         if self.raise_exc:
             raise self.raise_exc
-        return FakeMasterPlannerData(self.planned, self.schedule)
+        data = FakeMasterPlannerData(self.planned, self.schedule)
+        if self.mfg_dates is not None:
+            data.mfg_dates = self.mfg_dates
+        if self.cal_dates is not None:
+            data.cal_dates = self.cal_dates
+        return data
 
 
 class FakeInputFileWriter:
@@ -434,3 +443,68 @@ def test_services_do_not_import_adapters():
         if re.search(r"^\s*(from|import)\s+io_adapters", path.read_text(), re.M)
     ]
     assert offenders == [], offenders
+
+
+# ---------------------------------------------------------------------------
+# The comparison carries the Master Planner's own dates
+# ---------------------------------------------------------------------------
+
+def test_comparison_result_carries_week_dates_from_the_workbook():
+    """Weeks can be dated in the Comparison tab with no reference week set.
+
+    The comparison is against the manual plan, so the dates the planning team
+    actually works to are the ones already in that workbook.
+    """
+    from datetime import date
+
+    reader = FakeMasterPlannerReader(
+        mfg_dates=[None, date(2026, 1, 5), date(2026, 1, 12)],
+        cal_dates=[None, date(2026, 1, 9), date(2026, 1, 16)],
+    )
+
+    result = ComparisonService(master_planner_reader=reader).run(
+        ComparisonRequest(
+            master_planner_bytes=b"XLSX",
+            master_planner_sheet="Schedule",
+            optimized_summary={"total_penalty_cost": 0.0, "total_overtime_cost": 0.0,
+                               "total_capacity_cost": 0.0, "total_composite_cost": 0.0,
+                               "overtime_weeks": 0},
+            optimized_plan_df=pd.DataFrame({
+                "Week": [1, 2], "Good_Production": [5, 5],
+            }),
+            demand=tuple([0] + [5] * PARAMS.horizon_weeks),
+            params=PARAMS,
+        )
+    )
+
+    assert result.week_dates[:2] == [
+        (1, date(2026, 1, 5), date(2026, 1, 9)),
+        (2, date(2026, 1, 12), date(2026, 1, 16)),
+    ]
+
+
+def test_undated_weeks_are_omitted_rather_than_guessed():
+    from datetime import date
+
+    reader = FakeMasterPlannerReader(
+        mfg_dates=[None, None, date(2026, 1, 12)],
+        cal_dates=[None, None, date(2026, 1, 16)],
+    )
+
+    result = ComparisonService(master_planner_reader=reader).run(
+        ComparisonRequest(
+            master_planner_bytes=b"XLSX",
+            master_planner_sheet="Schedule",
+            optimized_summary={"total_penalty_cost": 0.0, "total_overtime_cost": 0.0,
+                               "total_capacity_cost": 0.0, "total_composite_cost": 0.0,
+                               "overtime_weeks": 0},
+            optimized_plan_df=pd.DataFrame({
+                "Week": [1, 2], "Good_Production": [5, 5],
+            }),
+            demand=tuple([0] + [5] * PARAMS.horizon_weeks),
+            params=PARAMS,
+        )
+    )
+
+    weeks = [w for w, _m, _c in result.week_dates]
+    assert 1 not in weeks and 2 in weeks

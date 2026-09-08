@@ -15,7 +15,14 @@ from domain.site_matching import STATUS_MATCHED, match_report_frame
 from services.dtos import ComparisonRequest
 from ui import sidebar
 from ui import state as S
-from ui.formatting import comparison_frame, usd, usd_signed
+from ui.formatting import (
+    add_week_dates,
+    comparison_frame,
+    usd,
+    usd_signed,
+    week_date_map,
+    week_label,
+)
 
 
 def _render_match_report(result) -> None:
@@ -107,6 +114,8 @@ def _render_result(result) -> None:
         "so it moves little between plans and can even worsen slightly."
     )
 
+    dates = week_date_map(result.week_dates)
+
     if result.baseline and result.baseline.capacity_violations:
         with st.expander(
             f"Manual plan capacity violations "
@@ -114,21 +123,37 @@ def _render_result(result) -> None:
         ):
             st.dataframe(
                 pd.DataFrame(
-                    result.baseline.capacity_violations,
-                    columns=["Week", "Planned", "Weekly capacity"],
+                    [
+                        {
+                            "Week": week_label(week, dates),
+                            "Planned": planned,
+                            "Weekly capacity": capacity,
+                        }
+                        for week, planned, capacity
+                        in result.baseline.capacity_violations
+                    ]
                 ),
                 width="stretch", hide_index=True,
             )
 
     if result.weekly_comparison is not None:
         with st.expander("Week-by-week production", expanded=False):
-            st.dataframe(
-                result.weekly_comparison, width="stretch", hide_index=True
-            )
-            chart = result.weekly_comparison.set_index("Week")[
-                ["Manual_Production", "Optimized_Production"]
-            ]
-            st.line_chart(chart)
+            table = add_week_dates(result.weekly_comparison, result.week_dates)
+            st.dataframe(table, width="stretch", hide_index=True)
+            if not dates:
+                st.caption(
+                    "Manufacturing dates were not found in the Master Planner, so "
+                    "weeks are shown by number."
+                )
+
+            # Plot against dates when they are known, so the axis reads as a
+            # calendar rather than as an index the reader has to translate.
+            columns = ["Manual_Production", "Optimized_Production"]
+            if "MFG_Date" in table.columns and table["MFG_Date"].notna().any():
+                chart = table.dropna(subset=["MFG_Date"]).set_index("MFG_Date")
+            else:
+                chart = table.set_index("Week")
+            st.line_chart(chart[columns])
 
     _render_match_report(result)
 

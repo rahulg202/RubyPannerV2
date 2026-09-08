@@ -477,6 +477,12 @@ the same model, component by component.
 Capacity barely moves between plans and can even come out slightly worse, because
 it is driven by demand versus factory size rather than by scheduling.
 
+Weeks here are dated from your Master Planner's own manufacturing dates, so the
+week-by-week table and the capacity-violation list both read as calendar dates and
+the chart plots against a real timeline. This works whether or not you have set a
+reference week, because the dates come from the workbook. If a week has no
+manufacturing date in the sheet, it's shown by number rather than guessed.
+
 ### Site match report
 
 Every per-customer figure depends on matching a row in your input file to a column in

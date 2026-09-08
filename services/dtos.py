@@ -159,6 +159,9 @@ class ComparisonResult:
     # Row-level reconciliation against the manual plan (domain.site_matching).
     match_report: list = field(default_factory=list)
     match_summary: dict = field(default_factory=dict)
+    # (week, mfg_date, cal_date) taken from the Master Planner itself, so weeks
+    # can be shown as dates even when no reference week has been set.
+    week_dates: list[tuple] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,24 @@ from services.dtos import ComparisonRequest, ComparisonResult
 from services.ports import MasterPlannerReaderPort
 
 
+def _week_dates(mp, horizon_weeks: int) -> list[tuple]:
+    """``(week, mfg_date, cal_date)`` for weeks the Master Planner dates.
+
+    Taken from the workbook rather than derived from a reference week, because the
+    comparison is against that plan and those are the dates the planning team
+    actually works to. Weeks with no date are omitted rather than guessed.
+    """
+    mfg = getattr(mp, "mfg_dates", None) or []
+    cal = getattr(mp, "cal_dates", None) or []
+    out: list[tuple] = []
+    for week in range(1, horizon_weeks + 1):
+        m = mfg[week] if week < len(mfg) else None
+        if m is None:
+            continue
+        out.append((week, m, cal[week] if week < len(cal) else None))
+    return out
+
+
 class ComparisonService:
     """Orchestrates the manual-vs-optimized cost comparison."""
 
@@ -97,4 +115,5 @@ class ComparisonService:
             warnings=warnings,
             match_report=match_report,
             match_summary=match_summary,
+            week_dates=_week_dates(mp, request.params.horizon_weeks),
         )
