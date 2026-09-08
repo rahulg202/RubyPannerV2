@@ -79,6 +79,14 @@ against a ceiling of 45, not 47. You can check any row this way: pick a
 manufacturing date in the Comparison tab's weekly table and the *Manual*
 production column will equal `Total Commercial` on that row exactly.
 
+This also feeds the idle-capacity figure, and it raises it. A QC generator does
+not fill a sellable slot, so a week producing 28 sellable units has 2 idle slots
+whether or not a QC unit was also made. Across your 52 weeks the plan holds 1,500
+sellable units against 1,560 normal-week slots, so the manual plan carries 219
+idle slots — 44 more than if the QC units were miscounted as sellable, worth
+$660,000 at the default $15,000 rate. That figure is now right rather than
+flattered; see L6 and §8.
+
 ### 2.2 What the tool derives per site
 
 From your 2026 data:
@@ -233,6 +241,38 @@ own question.
 
 **L5 — Capacity cost is mostly structural.** See §8. Roughly 98% of it is unavoidable
 arithmetic, not something the optimizer can improve.
+
+**L6 — Your manual plan is evaluated, not solved, and it may not be executable.**
+The Comparison tab replays your Master Planner through the same cost model as the
+optimizer. It does not *solve* it, so your plan can sit outside limits the optimizer
+is never allowed to cross. That matters more than it sounds, because breaking those
+limits makes a plan look **cheaper**: the limits are exactly what force generators to
+be built early and held, and holding is what the penalty charges for.
+
+Two limits are checked, and both are broken by the workbook you sent:
+
+| Limit | Weeks in your plan | Why the plan cannot be run |
+|---|---|---|
+| 45 sellable units in a week (3 batches) | 2 — weeks 14 (47) and 49 (49) | There is no fourth batch to make them in |
+| 2 EU-restricted units shipped per week | 7 — weeks 6, 14, 22, 41, 42, 48, 49 | Denmark, the UK, the Netherlands and Sweden take 2 a week between them, so the extra units must be built earlier and held |
+
+Your plan delivers every generator in the week it is due, which is why its penalty
+cost is exactly **$0**. The optimizer cannot do that: to ship 4 EU-restricted units in
+week 6 it must build 2 of them by week 5 and carry them, and the same in six other
+weeks. That is 12 unit-weeks of stock, charged at the $7,000 holding rate — **$84,000**.
+
+So a straight subtraction shows the optimizer costing $84,000 *more*, when what it has
+actually done is produce the cheapest plan that can be run at all. **When the tool
+detects any of these breaches it now stops reporting a saving** and instead names the
+weeks and labels the difference "cost of an executable plan". To get a like-for-like
+saving, correct those weeks in the Master Planner and re-run the comparison.
+
+One consequence worth knowing: this shows up most starkly when the capacity weight or
+capacity rate is turned down. Capacity utilisation is where the optimizer earns most
+of its advantage on your data ($3,285,000 for your plan against $1,725,000 for the
+optimized one). Set that rate near zero and you remove the optimizer's main gain while
+leaving in the cost of legality, so the total flips negative. At the default rates the
+same workbook shows the optimizer ahead by $407,000.
 
 **L6 — Calibration dates assume a constant weekday.** The tool steps forward in 7-day
 weeks, so if a real manufacturing date slips to another weekday, that week's
@@ -676,6 +716,10 @@ Total_Sr82_mCi       Curium activity + BWXT activity, surplus included
 | `Only X of Y sites matched a Master Planner column` | Input file and Master Planner use different identifiers | Generate the input file from Import Manual Plan |
 | `Site_ID 'X' already exists` | Duplicate identifier during onboarding | Use a unique serial number |
 | Quota row shows `Partial — not penalised` | Quarter only partly inside the horizon | Informational; set the reference week to a quarter boundary to remove |
+| `Manual plan produces more than the 45-unit weekly maximum in N week(s)` | The Master Planner schedules more than 3 batches' worth of sellable generators | Move the excess to an adjacent week; until then no saving is reported (L6) |
+| `Manual plan ships more than 2 EU-restricted unit(s) in a week without building stock beforehand` | More Denmark/UK/Netherlands/Sweden deliveries in one week than can ship | Build the excess a week earlier, or spread the deliveries (L6) |
+| `Manual plan ends the horizon with N unit(s) of unsold stock` | Plan produces more than total demand | Check for deliveries scheduled past week 52 |
+| `The manual plan cannot be run as written` | Any of the three above | The difference shown is the cost of legality, not a loss; fix the named weeks and re-run |
 
 We accept these are currently too terse in the Comparison screen. Row-level
 diagnostics — which row, what is wrong, how to fix it — are in progress.

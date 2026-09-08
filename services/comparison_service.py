@@ -77,6 +77,8 @@ class ComparisonService:
             request.params,
             request.shutdown_weeks,
             request.partial_shutdown_weeks,
+            list(request.eu_demand) or None,
+            request.params.row_cap if request.eu_demand else None,
         )
 
         if baseline.total_planned != baseline.total_demand:
@@ -85,13 +87,12 @@ class ComparisonService:
                 f"demand ({baseline.total_demand}); difference "
                 f"{baseline.total_planned - baseline.total_demand:+d} units."
             )
-        if baseline.capacity_violations:
-            weeks = ", ".join(str(w) for w, _p, _c in baseline.capacity_violations[:8])
-            warnings.append(
-                f"Manual plan exceeds weekly capacity in "
-                f"{len(baseline.capacity_violations)} week(s): {weeks}"
-                + ("..." if len(baseline.capacity_violations) > 8 else "")
-            )
+        # The manual plan is evaluated, not solved, so it can break constraints the
+        # optimizer cannot. Those breaches make it *cheaper*, because the
+        # constraints are exactly what force stock to be built ahead of time. Say
+        # so loudly rather than letting it read as the optimizer performing badly.
+        for reason in baseline.infeasibilities:
+            warnings.append(f"Manual plan {reason}.")
 
         components = compare_plans(baseline.summary, request.optimized_summary)
         weekly = weekly_comparison(planned, request.optimized_plan_df, request.params)
@@ -123,4 +124,5 @@ class ComparisonService:
             match_report=match_report,
             match_summary=match_summary,
             week_dates=_week_dates(mp, request.params.horizon_weeks),
+            baseline_infeasibilities=baseline.infeasibilities,
         )

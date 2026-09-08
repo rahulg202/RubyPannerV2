@@ -311,7 +311,8 @@ def test_comparison_service_warns_on_capacity_violation():
     planned[1] = 999          # far beyond weekly capacity
     svc = ComparisonService(FakeMasterPlannerReader(planned))
     result = svc.run(_comparison_request())
-    assert any("exceeds weekly capacity" in w for w in result.warnings)
+    assert any("weekly maximum" in w for w in result.warnings)
+    assert not result.baseline_is_comparable
 
 
 def test_comparison_baseline_excludes_qc_generators():
@@ -351,8 +352,42 @@ def test_comparison_capacity_violation_ignores_qc_headroom():
     result = ComparisonService(FakeMasterPlannerReader(planned, qc=qc)).run(
         _comparison_request())
 
-    assert not any("exceeds weekly capacity" in w for w in result.warnings)
+    assert not any("weekly maximum" in w for w in result.warnings)
     assert result.baseline.capacity_violations == []
+
+
+def test_comparison_service_flags_shipping_cap_violation():
+    """The manual plan must be held to the same shipping cap as the optimizer."""
+    T = PARAMS.horizon_weeks
+    planned = [0] * (T + 1)
+    planned[3] = 10
+    planned[8] = 10                      # just-in-time, no stock built
+    eu = [0] * (T + 1)
+    eu[3] = 4                            # 4 EU units due, only row_cap can ship
+
+    result = ComparisonService(FakeMasterPlannerReader(planned)).run(
+        _comparison_request(eu_demand=tuple(eu)))
+
+    assert result.baseline.eu_cap_violations == [(3, 4, PARAMS.row_cap, 4 - PARAMS.row_cap)]
+    assert not result.baseline_is_comparable
+    assert any("EU-restricted" in w for w in result.warnings)
+
+
+def test_comparison_service_comparable_when_manual_plan_is_legal():
+    T = PARAMS.horizon_weeks
+    planned = [0] * (T + 1)
+    planned[2] = 2                       # stock built for the week-3 EU demand
+    planned[3] = 8
+    planned[8] = 10
+    eu = [0] * (T + 1)
+    eu[3] = 4
+
+    result = ComparisonService(FakeMasterPlannerReader(planned)).run(
+        _comparison_request(eu_demand=tuple(eu)))
+
+    assert result.baseline.eu_cap_violations == []
+    assert result.baseline_is_comparable
+    assert result.baseline_infeasibilities == []
 
 
 def test_comparison_service_overtime_counts_reported():

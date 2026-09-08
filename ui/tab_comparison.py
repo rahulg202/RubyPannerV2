@@ -9,7 +9,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from domain.demand import build_weekly_demand
+from domain.demand import build_weekly_demand, build_weekly_row_demand
 from domain.errors import RubyFillError, ValidationError
 from domain.site_matching import STATUS_MATCHED, match_report_frame
 from services.dtos import ComparisonRequest
@@ -23,6 +23,44 @@ from ui.formatting import (
     week_date_map,
     week_label,
 )
+
+
+def _render_infeasible_baseline(result, total) -> None:
+    """Explain why the two costs are not comparable, instead of showing a saving.
+
+    The manual plan is evaluated, not solved, so it can break limits the optimizer
+    cannot. Those breaches make it look *cheaper*, because the limits are exactly
+    what force stock to be built ahead of time. Reporting that gap as a negative
+    saving reads as the optimizer performing badly, which is the wrong conclusion.
+    """
+    st.error(
+        "**The manual plan cannot be run as written, so these two costs are not "
+        "directly comparable.** The optimizer is held to limits the manual plan "
+        "breaks, and meeting those limits is what its extra cost buys."
+    )
+
+    st.markdown("Reading the Master Planner as written, the manual plan:")
+    for reason in result.baseline_infeasibilities:
+        st.markdown(f"- {reason}")
+
+    extra = -float(total["Saving_Abs"]) if total else 0.0
+    cols = st.columns(2)
+    cols[0].metric(
+        "Cost of an executable plan",
+        usd(extra) if extra > 0 else usd_signed(-extra),
+        help="What the optimized plan costs above the manual plan. This is the "
+             "price of staying inside the weekly maximum and the shipping cap, "
+             "not money the manual plan saves.",
+    )
+    cols[1].metric(
+        "Overtime weeks",
+        f"{result.overtime_optimized} vs {result.overtime_baseline}",
+        help="Optimized versus manual plan.",
+    )
+    st.caption(
+        "To get a like-for-like saving, correct the weeks listed above in the "
+        "Master Planner and run the comparison again."
+    )
 
 
 def _render_match_report(result) -> None:
@@ -88,14 +126,21 @@ def _render_result(result) -> None:
     st.divider()
     st.markdown("### Manual plan vs optimized")
 
+    # Infeasibilities get their own block below, so keep them out of the general
+    # warning list rather than saying the same thing twice.
+    infeasible_msgs = {f"Manual plan {r}." for r in result.baseline_infeasibilities}
     for warning in result.warnings:
-        st.warning(warning)
+        if warning not in infeasible_msgs:
+            st.warning(warning)
 
     total = next(
         (c for c in result.components if c["Component"] == "Total Composite"), None
     )
     penalty = next((c for c in result.components if c["Component"] == "Penalty"), None)
-    if total and penalty:
+
+    if not result.baseline_is_comparable:
+        _render_infeasible_baseline(result, total)
+    elif total and penalty:
         cols = st.columns(3)
         cols[0].metric("Total saving", usd_signed(total["Saving_Abs"]))
         cols[1].metric("Penalty saving", usd_signed(penalty["Saving_Abs"]))
@@ -134,6 +179,34 @@ def _render_result(result) -> None:
                     ]
                 ),
                 width="stretch", hide_index=True,
+            )
+
+    if result.baseline and result.baseline.eu_cap_violations:
+        with st.expander(
+            f"Manual plan shipping-cap violations "
+            f"({len(result.baseline.eu_cap_violations)})"
+        ):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Week": week_label(week, dates),
+                            "EU-restricted units due": due,
+                            "Can ship per week": cap,
+                            "Short by": short,
+                        }
+                        for week, due, cap, short
+                        in result.baseline.eu_cap_violations
+                    ]
+                ),
+                width="stretch", hide_index=True,
+            )
+            st.caption(
+                "Denmark, the UK, the Netherlands and Sweden take at most "
+                f"{result.baseline.eu_cap_violations[0][2]} generator(s) a week "
+                "between them. To deliver more in one week, the extra units have "
+                "to be made earlier and held, which is the stock the optimizer "
+                "builds and the manual plan does not."
             )
 
     if result.weekly_comparison is not None:
@@ -219,6 +292,9 @@ def render(comparison_service, settings_or_error) -> None:
     ready = opt_result is not None and have_mp
     if st.button("Run comparison", type="primary", key="cmp_run", disabled=not ready):
         demand = build_weekly_demand(opt_result.active_df, settings.params)
+        # Same EU-restricted demand the optimizer solved against, so the manual
+        # plan is held to the same QC shipping cap.
+        eu_demand = build_weekly_row_demand(opt_result.active_df, settings.params)
         active = opt_result.active_df
         has_name = "site_name" in active.columns
         active_sites = tuple(
@@ -236,6 +312,7 @@ def render(comparison_service, settings_or_error) -> None:
             partial_shutdown_weeks=settings.partial_shutdown_weeks,
             reference_week_date=settings.reference_week_date,
             active_sites=active_sites,
+            eu_demand=tuple(eu_demand),
         )
         with st.spinner("Reading the Master Planner and evaluating the manual plan..."):
             try:

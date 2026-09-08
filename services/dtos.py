@@ -143,6 +143,10 @@ class ComparisonRequest:
     reference_week_date: date | None = None
     # (site_id, site_name) per active input row, for the row-level match report.
     active_sites: tuple[tuple[str, str], ...] = ()
+    # EU-restricted demand per week. Needed to hold the manual plan to the same
+    # QC shipping cap the optimizer obeys; without it the manual plan is scored
+    # under a weaker rule set and can beat any plan the optimizer may build.
+    eu_demand: tuple[int, ...] = ()
 
 
 @dataclass
@@ -162,6 +166,15 @@ class ComparisonResult:
     # (week, mfg_date, cal_date) taken from the Master Planner itself, so weeks
     # can be shown as dates even when no reference week has been set.
     week_dates: list[tuple] = field(default_factory=list)
+    # Hard constraints the manual plan breaks. While this is non-empty the cost
+    # difference is not a saving the optimizer earned -- it is what the manual
+    # plan avoided paying by being unexecutable. The UI must say so.
+    baseline_infeasibilities: list[str] = field(default_factory=list)
+
+    @property
+    def baseline_is_comparable(self) -> bool:
+        """True when the manual plan obeys every constraint the optimizer obeys."""
+        return not self.baseline_infeasibilities
 
 
 # ---------------------------------------------------------------------------
