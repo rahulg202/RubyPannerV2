@@ -18,6 +18,7 @@ from domain.errors import RubyFillError, ValidationError
 from domain.onboarding import NewCustomer
 from services.dtos import OnboardingRequest
 from services.onboarding_service import MODE_FIXED, MODE_OPTIMIZE
+from ui import sidebar
 from ui import state as S
 from ui.formatting import XLSX_MIME, rankings_frame, usd_signed
 
@@ -583,24 +584,12 @@ def render(onboarding_service, settings_or_error) -> None:
     settings = settings_or_error
 
     mode = _render_mode()
-    have_mp = st.session_state.get(S.MP_BYTES) is not None
-    have_file = st.session_state.get(S.SITES_BYTES) is not None
-
     if mode == MODE_FIXED:
-        ready = have_mp
-        if not have_mp:
-            st.info(
-                "Upload the Master Planner workbook first — in **Import Manual "
-                "Plan** or **Comparison**. This mode reads your existing weekly "
-                "production from it."
-            )
+        # Fixed mode reads existing weekly production from the manual plan.
+        ready = sidebar.require(planner=True)
     else:
-        ready = have_file
-        if not have_file:
-            st.info(
-                "Upload a sites file in the Cost Optimizer tab first — the engine "
-                "needs your existing demand as the baseline."
-            )
+        # Re-planning mode needs existing demand as the baseline.
+        ready = sidebar.require(sites=True)
 
     customers = _render_editor(
         settings.reference_week_date, settings.params.horizon_weeks

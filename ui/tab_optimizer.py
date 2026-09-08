@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from datetime import date
 
-import pandas as pd
 import streamlit as st
 
 from domain.dates import current_planning_week
 from domain.errors import InfeasiblePlanError, RubyFillError, ValidationError
 from services.dtos import OptimizeRequest
+from ui import sidebar
 from ui import state as S
 from ui.formatting import (
     XLSX_MIME,
@@ -24,87 +24,6 @@ from ui.formatting import (
     quota_frame,
     usd,
 )
-
-
-def _upload_sites() -> None:
-    """Sites file uploader; stores bytes and sheet names in session state."""
-    uploaded = st.file_uploader(
-        "Upload your sites file",
-        type=["xlsx", "xls", "csv"],
-        key="opt_sites_uploader",
-        help="Columns required: Site_ID, Active, Next_Demand_Week, Interval_Weeks, Country.",
-    )
-    if uploaded is None:
-        return
-
-    data = uploaded.read()
-    st.session_state[S.SITES_BYTES] = data
-    st.session_state[S.SITES_NAME] = uploaded.name
-
-    if uploaded.name.lower().endswith(".csv"):
-        st.session_state[S.SITES_SHEETS] = None
-        st.session_state[S.SITES_SHEET] = "Sites"
-        st.success(f"Loaded **{uploaded.name}** (CSV)")
-        return
-
-    try:
-        import io
-        sheets = pd.ExcelFile(io.BytesIO(data)).sheet_names
-        st.session_state[S.SITES_SHEETS] = sheets
-        st.success(f"Loaded **{uploaded.name}** ({len(sheets)} sheet(s))")
-    except Exception as exc:
-        st.session_state[S.SITES_SHEETS] = None
-        st.error(f"Could not read that workbook: {exc}")
-
-
-def _sheet_selector() -> str:
-    sheets = st.session_state.get(S.SITES_SHEETS)
-    if not sheets:
-        return st.session_state.get(S.SITES_SHEET) or "Sites"
-    index = sheets.index("Sites") if "Sites" in sheets else 0
-    choice = st.selectbox(
-        "Sites sheet", options=sheets, index=index, key="opt_sheet_select"
-    )
-    st.session_state[S.SITES_SHEET] = choice
-    return choice
-
-
-def _upload_manual_plan() -> None:
-    """Optional Master Planner upload, used to compare customer weeks."""
-    with st.expander("Manual plan (optional, enables changed customer weeks)",
-                     expanded=False):
-        st.caption(
-            "Upload the Master Planner workbook to compare the optimizer's "
-            "production weeks against the plan your team built by hand. Without "
-            "it the plan still runs, but changed customer weeks cannot be shown."
-        )
-        uploaded = st.file_uploader(
-            "Master Planner workbook",
-            type=["xlsx", "xls"],
-            key="opt_mp_uploader",
-        )
-        if uploaded is not None:
-            import io as _io
-            data = uploaded.read()
-            st.session_state[S.MP_BYTES] = data
-            st.session_state[S.MP_NAME] = uploaded.name
-            try:
-                sheets = pd.ExcelFile(_io.BytesIO(data)).sheet_names
-                st.session_state[S.MP_SHEETS] = sheets
-                st.success(f"Loaded **{uploaded.name}**")
-            except Exception as exc:
-                st.session_state[S.MP_SHEETS] = None
-                st.error(f"Could not read that workbook: {exc}")
-
-        sheets = st.session_state.get(S.MP_SHEETS)
-        if sheets:
-            index = sheets.index("Schedule") if "Schedule" in sheets else 0
-            st.session_state[S.MP_SHEET] = st.selectbox(
-                "Schedule sheet", options=sheets, index=index,
-                key="opt_mp_sheet_select",
-            )
-        elif st.session_state.get(S.MP_BYTES) is None:
-            st.info("No manual plan uploaded.")
 
 
 def _render_metrics(summary: dict) -> None:
@@ -307,11 +226,7 @@ def render(optimizer_service, settings_or_error) -> None:
     raised while assembling it — the tab surfaces the error rather than running.
     """
     st.subheader("Cost Optimizer")
-    st.caption("Upload your sites file and run the optimizer.")
-
-    _upload_sites()
-    sheet = _sheet_selector()
-    _upload_manual_plan()
+    st.caption("Runs the optimizer on the sites file loaded in the sidebar.")
 
     if isinstance(settings_or_error, ValidationError):
         st.error("Fix these settings before running:")
@@ -320,9 +235,13 @@ def render(optimizer_service, settings_or_error) -> None:
         return
     settings = settings_or_error
 
-    have_file = st.session_state.get(S.SITES_BYTES) is not None
-    if not have_file:
-        st.info("Upload a sites file to get started.")
+    sheet = sidebar.sites_sheet()
+    have_file = sidebar.require(sites=True)
+    if have_file and not sidebar.planner_loaded():
+        st.caption(
+            "No Master Planner loaded. The plan will still run, but changed "
+            "customer weeks cannot be shown — load it in the sidebar for that."
+        )
 
     if st.button("Run optimizer", type="primary", key="opt_run", disabled=not have_file):
         request = OptimizeRequest(

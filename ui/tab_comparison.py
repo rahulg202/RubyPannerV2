@@ -6,8 +6,6 @@ against the optimized plan, component by component.
 
 from __future__ import annotations
 
-import io
-
 import pandas as pd
 import streamlit as st
 
@@ -15,38 +13,9 @@ from domain.demand import build_weekly_demand
 from domain.errors import RubyFillError, ValidationError
 from domain.site_matching import STATUS_MATCHED, match_report_frame
 from services.dtos import ComparisonRequest
+from ui import sidebar
 from ui import state as S
 from ui.formatting import comparison_frame, usd, usd_signed
-
-
-def _upload_master_planner() -> str:
-    uploaded = st.file_uploader(
-        "Upload the Master Planner workbook",
-        type=["xlsx", "xls"],
-        key="cmp_mp_uploader",
-        help="The manual plan is read from its Schedule sheet.",
-    )
-    if uploaded is not None:
-        data = uploaded.read()
-        st.session_state[S.MP_BYTES] = data
-        st.session_state[S.MP_NAME] = uploaded.name
-        try:
-            sheets = pd.ExcelFile(io.BytesIO(data)).sheet_names
-            st.session_state[S.MP_SHEETS] = sheets
-            st.success(f"Loaded **{uploaded.name}** ({len(sheets)} sheet(s))")
-        except Exception as exc:
-            st.session_state[S.MP_SHEETS] = None
-            st.error(f"Could not read that workbook: {exc}")
-
-    sheets = st.session_state.get(S.MP_SHEETS)
-    if sheets:
-        index = sheets.index("Schedule") if "Schedule" in sheets else 0
-        choice = st.selectbox(
-            "Schedule sheet", options=sheets, index=index, key="cmp_sheet_select"
-        )
-        st.session_state[S.MP_SHEET] = choice
-        return choice
-    return st.session_state.get(S.MP_SHEET) or "Schedule"
 
 
 def _render_match_report(result) -> None:
@@ -193,7 +162,7 @@ def render(comparison_service, settings_or_error) -> None:
         "See what the optimizer saved against the plan your team built by hand."
     )
 
-    sheet = _upload_master_planner()
+    sheet = sidebar.planner_sheet()
 
     if isinstance(settings_or_error, ValidationError):
         st.error("Fix these settings before running:")
@@ -217,12 +186,10 @@ def render(comparison_service, settings_or_error) -> None:
         )
 
     opt_result = st.session_state.get(S.OPT_RESULT)
-    have_mp = st.session_state.get(S.MP_BYTES) is not None
+    have_mp = sidebar.require(planner=True)
 
     if opt_result is None:
         st.info("Run the Cost Optimizer first — the comparison needs its result.")
-    if not have_mp:
-        st.info("Upload the Master Planner workbook to compare against.")
 
     ready = opt_result is not None and have_mp
     if st.button("Run comparison", type="primary", key="cmp_run", disabled=not ready):

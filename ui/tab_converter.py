@@ -8,52 +8,16 @@ the manual plan to the optimized plan afterwards.
 
 from __future__ import annotations
 
-import io
-
-import pandas as pd
 import streamlit as st
 
 from domain.errors import RubyFillError, ValidationError
 from services.dtos import ConversionRequest
+from ui import sidebar
 from ui import state as S
 from ui.formatting import XLSX_MIME
 
 GENERATED_FILENAME = "sites_from_manual_plan.xlsx"
 ANNOTATED_FILENAME = "master_planner_with_site_codes.xlsx"
-
-
-def _upload_master_planner() -> str:
-    """Master Planner uploader, sharing session state with the other tabs."""
-    uploaded = st.file_uploader(
-        "Upload the Master Planner workbook",
-        type=["xlsx", "xls"],
-        key="conv_mp_uploader",
-        help="The same workbook your team plans in by hand.",
-    )
-    if uploaded is not None:
-        data = uploaded.read()
-        st.session_state[S.MP_BYTES] = data
-        st.session_state[S.MP_NAME] = uploaded.name
-        st.session_state[S.CONV_RESULT] = None
-        try:
-            sheets = pd.ExcelFile(io.BytesIO(data)).sheet_names
-            st.session_state[S.MP_SHEETS] = sheets
-            st.success(f"Loaded **{uploaded.name}** ({len(sheets)} sheet(s))")
-        except Exception as exc:
-            st.session_state[S.MP_SHEETS] = None
-            st.error(f"Could not read that workbook: {exc}")
-    elif st.session_state.get(S.MP_NAME):
-        st.caption(f"Using **{st.session_state[S.MP_NAME]}**, already uploaded.")
-
-    sheets = st.session_state.get(S.MP_SHEETS)
-    if sheets:
-        index = sheets.index("Schedule") if "Schedule" in sheets else 0
-        choice = st.selectbox(
-            "Schedule sheet", options=sheets, index=index, key="conv_sheet_select"
-        )
-        st.session_state[S.MP_SHEET] = choice
-        return choice
-    return st.session_state.get(S.MP_SHEET) or "Schedule"
 
 
 def _render_anchor_status(settings) -> None:
@@ -192,15 +156,20 @@ def _render_result(result, service) -> None:
             f"workbook with it and the problem goes away for good."
         )
 
-    if st.button("Use it in the Cost Optimizer now", key="conv_use"):
+    if st.button("Use it as the sites file now", key="conv_use"):
         st.session_state[S.SITES_BYTES] = result.xlsx_bytes
         st.session_state[S.SITES_NAME] = GENERATED_FILENAME
         st.session_state[S.SITES_SHEETS] = ["Sites", "Site_Mapping", "Conversion_Notes"]
         st.session_state[S.SITES_SHEET] = "Sites"
+        # The sidebar's sheet dropdown owns its own widget state. Left in place it
+        # would reassert a sheet name from the previous file, so drop it and let
+        # the dropdown re-initialise against this file's sheets.
+        st.session_state.pop("sb_sites_sheet", None)
         st.session_state[S.OPT_RESULT] = None
         st.session_state[S.CMP_RESULT] = None
         st.success(
-            "Loaded into the Cost Optimizer tab. Open it and press Run optimizer."
+            "Loaded as the sites file — you will see it in the sidebar. Open the "
+            "Cost Optimizer tab and press Run optimizer."
         )
 
     with st.expander(f"Sites ({len(result.sites_df)})", expanded=True):
@@ -253,8 +222,6 @@ def render(conversion_service, settings_or_error) -> None:
         "Comparison tab line the two plans up."
     )
 
-    sheet = _upload_master_planner()
-
     if isinstance(settings_or_error, ValidationError):
         st.error("Fix these settings before converting:")
         for message in settings_or_error.errors:
@@ -262,12 +229,11 @@ def render(conversion_service, settings_or_error) -> None:
         return
     settings = settings_or_error
 
+    sheet = sidebar.planner_sheet()
     _render_anchor_status(settings)
     year = _year_override()
 
-    have_mp = st.session_state.get(S.MP_BYTES) is not None
-    if not have_mp:
-        st.info("Upload the Master Planner workbook to begin.")
+    have_mp = sidebar.require(planner=True)
 
     if st.button("Build input file", type="primary", key="conv_run",
                  disabled=not have_mp):

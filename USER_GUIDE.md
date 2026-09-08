@@ -54,14 +54,33 @@ the tab and they are gone, so download anything you want to keep.
 
 The shortest path from your manual plan to an optimized plan:
 
-1. **Settings → Reference dates.** Tick *Use a reference week* and enter the
+1. **Sidebar.** Load your files once. Everything else reads them from there — no
+   tab asks you to upload anything again.
+2. **Settings → Reference dates.** Tick *Use a reference week* and enter the
    manufacturing date you want the plan to start from. This makes every result show
    real dates instead of week numbers, and it fixes what "week 1" means everywhere —
    the import, the optimizer and the comparison all then agree.
-2. **Import Manual Plan.** Upload the Master Planner workbook, press
-   *Build input file*, then press *Use it in the Cost Optimizer now*.
-3. **Cost Optimizer.** Press *Run optimizer*. Read the plan, download the workbook.
-4. **Comparison.** Press *Run comparison* to see the saving against your manual plan.
+3. **Import Manual Plan.** Press *Build input file*, then *Use it as the sites file
+   now*.
+4. **Cost Optimizer.** Press *Run optimizer*. Read the plan, download the workbook.
+5. **Comparison.** Press *Run comparison* to see the saving against your manual plan.
+
+## The sidebar
+
+Two files, loaded once, shared by every tab.
+
+| File | Needed by |
+|---|---|
+| **Sites input file** | Cost Optimizer, Onboarding (re-plan mode) |
+| **Master Planner workbook** | Import Manual Plan, Comparison, changed customer weeks, Onboarding (fixed mode) |
+
+Each has one sheet selector, also in the sidebar. For the Master Planner that is
+normally `Schedule`; if you pick a sheet that isn't the schedule grid the tool finds
+the right one and tells you which it used.
+
+A tick beside a filename means it's loaded. *Clear loaded files* removes both and
+every result derived from them. Loading a new file clears previous results too, so
+you are never looking at output from a file you have replaced.
 
 That is the whole loop. Everything below is detail.
 
@@ -205,11 +224,11 @@ intervals.
 
 ### How to use it
 
-1. Upload the Master Planner workbook.
+1. Load the Master Planner in the sidebar, if you haven't already.
 2. Confirm the sheet is **Schedule**.
 3. Press **Build input file**.
-4. Either **Download input file**, or press **Use it in the Cost Optimizer now** to
-   load it straight into the next tab.
+4. Either **Download input file**, or press **Use it as the sites file now** to load
+   it straight into the sidebar, ready for the Cost Optimizer.
 
 ### What it reads
 

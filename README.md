@@ -37,7 +37,14 @@ The application is one Streamlit app with five tabs. Settings apply everywhere.
 | **Import Manual Plan** | Reads the wide Master Planner and writes the optimizer's input sheet: one row per site with its code, first demand week, interval, country, and EU-restricted flag. Also emits a code-to-column mapping, which is what lets the Comparison tab match the two files. |
 | **Cost Optimizer** | Upload the sites file and run. Shows the weekly plan with manufacturing and calibration dates, supplier allocation, quarterly quota status, and which customers had their production week moved. Downloads a single workbook containing everything. |
 | **Onboarding** | Add several new customers at once, each with its own permissible start window. Two modes: re-plan all 52 weeks, or hold the existing plan fixed and price slotting the site in. Hands back a ready-to-use input file with the new customers included. |
-| **Comparison** | Upload the Master Planner workbook to see what the optimizer saved against the plan your team built by hand. |
+| **Comparison** | What the optimizer saved against the plan your team built by hand, plus a row-level report of which sites matched between the two files. |
+
+Both files are loaded once in the **sidebar** (`ui/sidebar.py`) and shared through
+session state. Tabs call `sidebar.require(sites=..., planner=...)` and prompt for
+whatever is missing rather than carrying their own uploader. There is exactly one
+writer for each sheet setting — a test enforces this, because three tabs writing one
+setting meant the last one rendered won, and Streamlit renders every tab on each
+interaction.
 
 ### Typical sequence
 

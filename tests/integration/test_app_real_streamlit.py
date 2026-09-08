@@ -286,3 +286,91 @@ at.session_state[S.CMP_RESULT] = ComparisonResult(
 at.run()
 report(at)
 """))
+
+
+# ---------------------------------------------------------------------------
+# Files are loaded once, in the sidebar, and shared by every tab
+# ---------------------------------------------------------------------------
+
+def test_only_the_sidebar_uploads_files():
+    """Four uploaders across four tabs became two, both in the sidebar.
+
+    Each tab used to carry its own, and three separate Master Planner sheet
+    dropdowns all wrote to one shared setting. Because Streamlit renders every tab
+    on each interaction, the last dropdown to render won — so changing the sheet in
+    Comparison silently left Onboarding parsing a summary sheet.
+    """
+    import pathlib
+    import re
+
+    uploaders = {}
+    for path in pathlib.Path("ui").glob("*.py"):
+        count = len(re.findall(r"st\.file_uploader\(", path.read_text()))
+        if count:
+            uploaders[path.name] = count
+
+    assert uploaders == {"sidebar.py": 2}, uploaders
+
+
+def test_only_one_widget_sets_each_sheet():
+    """One owner per setting, so no tab can overwrite another's choice."""
+    import pathlib
+    import re
+
+    writers = {}
+    for path in pathlib.Path("ui").glob("*.py"):
+        text = path.read_text()
+        for setting in ("S.MP_SHEET", "S.SITES_SHEET"):
+            hits = len(re.findall(rf"{re.escape(setting)}\]\s*=", text))
+            if hits:
+                writers.setdefault(setting, {})[path.name] = hits
+
+    # tab_converter also seeds the sites sheet when handing its output over.
+    assert set(writers["S.MP_SHEET"]) == {"sidebar.py"}, writers["S.MP_SHEET"]
+    assert set(writers["S.SITES_SHEET"]) <= {"sidebar.py", "tab_converter.py"}, \
+        writers["S.SITES_SHEET"]
+
+
+def test_a_file_loaded_once_reaches_every_tab():
+    """The sidebar writes shared state; no tab should ask for the file again."""
+    _assert_rendered(_run(_HEADER + """
+import io
+
+import openpyxl
+from streamlit.testing.v1 import AppTest
+
+# Minimal sites workbook and Master Planner, built in-process.
+sites = openpyxl.Workbook()
+ws = sites.active
+ws.title = "Sites"
+ws.append(["Site_ID", "Active", "Next_Demand_Week", "Interval_Weeks", "Country"])
+ws.append(["S1", "Y", 2, 7, "usa"])
+sb = io.BytesIO(); sites.save(sb)
+
+from datetime import datetime
+mp = openpyxl.Workbook()
+mw = mp.active
+mw.title = "Schedule"
+mw.append([None] * 12)
+mw.append(["Weeks #", "MFG Date", "Calibration date", "Problem?", "Month", "FY",
+           "US Demand", "RoW Demand", "Total Commercial", "QC GEN", "US STAB",
+           "00449  Alpha Care, CA (7)"])
+mw.append([1, datetime(2026, 1, 5), datetime(2026, 1, 9), None, "Jan", 2026,
+           1, 0, 1, 1, None, 1])
+mb = io.BytesIO(); mp.save(mb)
+
+at = AppTest.from_file("app.py", default_timeout=300)
+at.session_state["sites_bytes"] = sb.getvalue()
+at.session_state["sites_name"] = "sites.xlsx"
+at.session_state["sites_sheet_names"] = ["Sites"]
+at.session_state["mp_bytes"] = mb.getvalue()
+at.session_state["mp_name"] = "planner.xlsx"
+at.session_state["mp_sheet_names"] = ["Schedule"]
+at.run()
+report(at)
+
+# The sidebar resolved both sheets, and every tab rendered against them.
+assert at.session_state["sites_sheet"] == "Sites", at.session_state["sites_sheet"]
+assert at.session_state["mp_sheet"] == "Schedule", at.session_state["mp_sheet"]
+print("sheets:", at.session_state["sites_sheet"], at.session_state["mp_sheet"])
+"""))

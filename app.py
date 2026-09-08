@@ -25,6 +25,7 @@ from services.optimizer_service import OptimizerService
 from services.settings_service import DEFAULTS, build_settings
 from ui import state as S
 from ui import (
+    sidebar,
     tab_comparison,
     tab_converter,
     tab_onboarding,
@@ -88,6 +89,9 @@ def main() -> None:
         ["Settings", "Import Manual Plan", "Cost Optimizer", "Onboarding",
          "Comparison"]
     )
+
+    # Files are loaded once, in the sidebar, and shared by every tab.
+    sidebar.render()
 
     with tab_set:
         tab_settings.render()
