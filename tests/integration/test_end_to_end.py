@@ -276,7 +276,7 @@ def test_optimizer_never_worse_than_manual_on_weighted_objective(
         demand=tuple(demand), params=PARAMS,
     ))
     total = next(c for c in comparison.components
-                 if c["Component"] == "Total Composite")
+                 if c["Component"] == "Total")
     assert total["Optimized"] <= total["Baseline"] + 1e-6
 
 

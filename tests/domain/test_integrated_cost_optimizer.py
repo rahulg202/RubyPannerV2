@@ -832,7 +832,8 @@ REQUIRED_PLAN_COLUMNS = [
     "Batch_Count", "Batch1_Produced", "Batch2_Produced", "Batch3_Produced",
     "Produced_Total", "Testing_Discard", "Overtime_Used", "Net_Inventory_End",
     "Early_Units_Held", "Late_Units_Backlog",
-    "ROW_Demand_Due", "ROW_Fulfilled", "ROW_Inventory",
+    "EU_Restricted_Due", "EU_Shipping_Cap",
+    "EU_Prebuild_Required", "EU_Prebuild_Available",
 ]
 
 

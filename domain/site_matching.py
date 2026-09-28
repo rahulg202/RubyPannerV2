@@ -106,6 +106,19 @@ def build_match_report(
         then Master Planner columns with no input row.
     """
     codes = set(manual_codes) if manual_codes is not None else set(manual_headers)
+    all_input_ids = {str(site_id).strip() for site_id, _name in input_sites}
+    # Columns no input row claims. Computed once, from the whole input set, so a
+    # suggestion can never point at a column a *later* row matches.
+    #
+    # This was previously narrowed by the rows seen so far, which made the output
+    # depend on row order: re-sorting the input file changed which counterpart was
+    # suggested, and a column could be offered to one row while belonging to
+    # another further down.
+    unmatched_headers = {
+        code: header for code, header in manual_headers.items()
+        if code not in all_input_ids
+    }
+
     seen_input: set[str] = set()
     rows: list[MatchRow] = []
 
@@ -122,8 +135,6 @@ def build_match_report(
             continue
 
         # Unmatched: name the problem and offer the likeliest counterpart.
-        unmatched_headers = {c: h for c, h in manual_headers.items()
-                             if c not in seen_input}
         code, header = _suggest(site_name or sid, unmatched_headers)
         if code:
             suggestion = f"{code} — {header}"

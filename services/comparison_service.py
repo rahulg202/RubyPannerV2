@@ -8,6 +8,7 @@ comparison with savings.
 from __future__ import annotations
 
 from domain.comparison import compare_plans, compute_baseline_cost, weekly_comparison
+from domain.errors import StaleResultError
 from domain.site_matching import build_match_report, summarize_match
 from services.dtos import ComparisonRequest, ComparisonResult
 from services.ports import MasterPlannerReaderPort
@@ -37,6 +38,26 @@ class ComparisonService:
     def __init__(self, master_planner_reader: MasterPlannerReaderPort) -> None:
         self._reader = master_planner_reader
 
+    @staticmethod
+    def _require_current(request: ComparisonRequest) -> None:
+        """Refuse to compare a stored plan against different settings.
+
+        An empty stored fingerprint counts as a mismatch, not as a match: a result
+        that was never stamped cannot be shown to be current, and treating unknown
+        as current is how the original defect stayed invisible.
+
+        Both fingerprints empty means the caller is not using the guard at all
+        (older programmatic callers and unit tests), which is allowed.
+        """
+        current = request.settings_fingerprint
+        stored = request.optimized_settings_fingerprint
+        if not current and not stored:
+            return
+        if current != stored:
+            raise StaleResultError(
+                expected=current, actual=stored, what="optimized plan"
+            )
+
     def run(self, request: ComparisonRequest) -> ComparisonResult:
         """Parse the Master Planner, evaluate it, and compare against the optimum.
 
@@ -46,6 +67,12 @@ class ComparisonService:
             If the Master Planner sheet cannot be located or parsed.
         """
         warnings: list[str] = []
+
+        # Staleness guard, before any work. A stored plan solved under different
+        # cost rates cannot be compared against a baseline evaluated under the
+        # current ones — the difference would be attributed to the optimizer
+        # rather than to the settings change that actually caused it.
+        self._require_current(request)
 
         mp = self._reader.parse(
             request.master_planner_bytes,
@@ -79,6 +106,13 @@ class ComparisonService:
             request.partial_shutdown_weeks,
             list(request.eu_demand) or None,
             request.params.row_cap if request.eu_demand else None,
+            # Supplier params make the quarterly quota advisory appear on *this*
+            # side too. Without them the optimized side reports a shortfall, this
+            # side reports nothing, and the difference reads as the optimizer
+            # being billions worse than a plan identical to it.
+            supplier_params=request.supplier_params,
+            reference_week_date=request.reference_week_date,
+            demand_events=list(request.demand_events) or None,
         )
 
         if baseline.total_planned != baseline.total_demand:

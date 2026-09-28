@@ -15,7 +15,7 @@ import streamlit as st
 
 from domain.dates import current_planning_week
 from domain.errors import RubyFillError, ValidationError
-from domain.onboarding import NewCustomer
+from domain.onboarding import OBJECTIVES, NewCustomer
 from services.dtos import OnboardingRequest
 from services.onboarding_service import MODE_FIXED, MODE_OPTIMIZE
 from ui import sidebar
@@ -24,6 +24,7 @@ from ui.formatting import (
     XLSX_MIME,
     rankings_frame,
     usd_signed,
+    usd_signed_md,
     week_date_map,
     week_label,
 )
@@ -39,9 +40,13 @@ BLANK_ROW = {
 }
 
 OBJECTIVE_LABELS = {
+    # Keys must track domain.onboarding.OBJECTIVES. "capacity" was removed as a
+    # ranking objective: ranking on Δ capacity ranked on how many deliveries
+    # happened to fit inside the horizon, which always favoured week 1 regardless
+    # of cost. It remains a displayed column.
+    "marginal": "Lowest added cost",
     "penalty": "Lowest Δ penalty",
     "overtime": "Lowest Δ overtime",
-    "capacity": "Lowest Δ capacity",
 }
 
 
@@ -443,42 +448,72 @@ def _render_selection_metrics(selected, fixed_mode: bool) -> None:
         else:
             st.caption(
                 f"Accommodating these customers costs "
-                f"**{usd_signed(selected.added_cost)}** on top of your current "
+                f"**{usd_signed_md(selected.added_cost)}** on top of your current "
                 f"plan. Unused-capacity cost is not included — your plan is fixed, "
                 f"so its utilisation does not change."
             )
         return
 
+    marginal = getattr(selected, "delta_marginal", 0.0)
+    added = getattr(selected, "generators_added", 0)
+
     cols = st.columns(4)
-    cols[0].metric("Effect on total cost", usd_signed(selected.delta_composite),
-                   help="Change in the whole plan's cost versus today, with these "
-                        "customers added. Negative means the plan gets cheaper.")
+    cols[0].metric(
+        "Added cost of these weeks", usd_signed(marginal),
+        help="Penalty plus overtime: the cost that actually changes with the start "
+             "weeks you pick. Idle-capacity cost is excluded, because it moves only "
+             "with how many deliveries land inside the 52-week window rather than "
+             "with whether those weeks are good ones.",
+    )
     cols[1].metric("Δ Penalty", usd_signed(selected.delta_penalty),
                    help="Change in early/late inventory cost.")
     cols[2].metric("Δ Overtime", usd_signed(selected.delta_overtime),
                    help="Change in overtime cost.")
-    cols[3].metric("Δ Capacity", usd_signed(selected.delta_capacity),
-                   help="Change in unused-capacity cost.")
+    cols[3].metric(
+        "Deliveries in horizon", added,
+        help="Generators these start weeks need before week 52. Later start weeks "
+             "fit fewer, which is the only reason the whole-plan total moves "
+             "between candidates.",
+    )
 
-    if selected.delta_composite < 0:
+    if marginal == 0:
         st.caption(
-            f"Adding these customers **{_cost_effect(selected.delta_composite)}** "
-            "overall. That is normal here: new demand fills production slots the "
-            "factory is already paying for, so unused-capacity cost falls by more "
-            "than the extra inventory and overtime cost."
+            "**These start weeks cost nothing extra.** The factory absorbs the new "
+            "demand with no additional overtime and no early build-up, so every "
+            "week in the window is equally workable on cost grounds — decide on "
+            "commercial or clinical grounds instead."
         )
-    elif selected.delta_composite > 0:
+    elif marginal > 0:
         st.caption(
-            f"Adding these customers **{_cost_effect(selected.delta_composite)}**. "
-            "The extra demand pushes production past comfortable capacity in some "
-            "weeks, so overtime or early build-up is needed."
+            f"Accommodating these customers **adds {usd_signed_md(marginal)}** in "
+            f"penalty and overtime. The extra demand pushes production past "
+            f"comfortable capacity in some weeks, so overtime or early build-up is "
+            f"needed."
+        )
+    else:
+        st.caption(
+            f"These start weeks **reduce** penalty and overtime by "
+            f"{usd_signed_md(-marginal)}, by filling weeks that were previously uneven."
+        )
+
+    with st.expander("Why the whole-plan total shows a saving"):
+        st.markdown(
+            f"The whole-plan figure is **{usd_signed_md(selected.delta_composite)}**, "
+            f"of which **{usd_signed_md(selected.delta_capacity)}** is unused-capacity "
+            f"cost. Each of the {added} deliveries these customers need takes a "
+            f"production slot that would otherwise have sat idle and been charged "
+            f"for, so the total drops by roughly the capacity rate per delivery.\n\n"
+            "That is arithmetic rather than money saved, and it is why the ranking "
+            "above uses the added-cost figure: ranking on the whole-plan total just "
+            "picks whichever start week fits the most deliveries in before week 52."
         )
 
 
 def _render_rankings(result, customers) -> None:
     site_ids = [c.site_id for c in customers]
-    tabs = st.tabs([OBJECTIVE_LABELS[k] for k in ("penalty", "overtime", "capacity")])
-    for tab, objective in zip(tabs, ("penalty", "overtime", "capacity")):
+    objectives = tuple(k for k in OBJECTIVES if k in OBJECTIVE_LABELS)
+    tabs = st.tabs([OBJECTIVE_LABELS[k] for k in objectives])
+    for tab, objective in zip(tabs, objectives):
         with tab:
             options = result.rankings.get(objective, [])
             if not options:
@@ -496,16 +531,19 @@ def _render_rankings(result, customers) -> None:
                 "the row.** Negative means cheaper. Rows are ordered best-first "
                 "for this objective."
             )
-            if objective == "capacity":
-                st.caption(
-                    "**Δ capacity is normally negative, and that is expected.** "
-                    "Each generator the new site needs takes a production slot "
-                    "that would otherwise have sat idle, and idle slots are "
-                    "charged — so a site needing 7 generators over the year "
-                    "typically shows about 7 × the capacity rate as a saving. "
-                    "Weeks already at or above the normal ceiling contribute "
-                    "nothing here, because they had no idle slot to fill."
-                )
+            # The horizon-edge effect, stated wherever the ranking is read. Δ
+            # Composite and Δ Capacity are dominated by it, which is why neither
+            # is ranked on any more.
+            st.caption(
+                "**Read Δ Marginal, not Δ Composite.** Δ Capacity falls by roughly "
+                "the capacity rate for every delivery the new site needs, because "
+                "each one takes a slot that would otherwise have sat idle and been "
+                "charged for. Since a later start week fits fewer deliveries inside "
+                "the 52 weeks — see *Deliveries in horizon* — earlier weeks always "
+                "look cheaper on Δ Composite, for reasons of where the horizon ends "
+                "rather than anything operational. Δ Marginal leaves that out and "
+                "shows only what genuinely responds to the choice."
+            )
 
 
 def _cost_effect(delta: float) -> str:

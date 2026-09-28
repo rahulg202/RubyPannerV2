@@ -154,10 +154,13 @@ def test_estimate_flags_heuristic_for_large_space():
 # ---------------------------------------------------------------------------
 
 def _res(weeks, pen, ot, cap, comp):
+    # delta_marginal is what ranking uses: penalty + overtime at unit weights,
+    # excluding the capacity floor. See domain.onboarding.OBJECTIVES.
     return CombinationResult(
         selected_weeks=weeks, feasible=True,
         delta_penalty=pen, delta_overtime=ot,
         delta_capacity=cap, delta_composite=comp,
+        delta_marginal=pen + ot,
     )
 
 
@@ -170,7 +173,8 @@ def test_ranking_sorted_per_objective():
     ranked = rank_top_n(rs)
     assert [r.selected_weeks["A"] for r in ranked["penalty"]] == [2, 3, 1]
     assert [r.selected_weeks["A"] for r in ranked["overtime"]] == [1, 3, 2]
-    assert [r.selected_weeks["A"] for r in ranked["capacity"]] == [2, 3, 1]
+    # marginal = penalty + overtime: 310, 130, 220 -> weeks 2, 3, 1
+    assert [r.selected_weeks["A"] for r in ranked["marginal"]] == [2, 3, 1]
 
 
 def test_ranking_caps_at_top_n():

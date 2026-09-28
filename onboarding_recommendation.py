@@ -128,13 +128,13 @@ def run_baseline(
     partial_shutdown_weeks = partial_shutdown_weeks or []
 
     demand = build_weekly_demand(active_df, params)
-    row_demand = build_weekly_row_demand(active_df, params)
+    eu_demand = build_weekly_row_demand(active_df, params)
 
     _, summary = solve_plan_integrated(
         demand=demand,
         shutdown_weeks=shutdown_weeks,
         partial_shutdown_weeks=partial_shutdown_weeks,
-        row_demand=row_demand,
+        eu_demand=eu_demand,
         row_cap=params.row_cap,
         params=params,
     )
@@ -159,13 +159,13 @@ def evaluate_candidate(
     partial_shutdown_weeks = partial_shutdown_weeks or []
 
     base_demand = build_weekly_demand(active_df, params)
-    base_row_demand = build_weekly_row_demand(active_df, params)
+    base_eu_demand = build_weekly_row_demand(active_df, params)
 
     cand_demand = add_new_sites_demand(
         base_demand, new_sites, candidate_start_week, params,
     )
-    cand_row_demand = add_new_sites_row_demand(
-        base_row_demand, new_sites, candidate_start_week, params,
+    cand_eu_demand = add_new_sites_row_demand(
+        base_eu_demand, new_sites, candidate_start_week, params,
     )
 
     try:
@@ -173,7 +173,7 @@ def evaluate_candidate(
             demand=cand_demand,
             shutdown_weeks=shutdown_weeks,
             partial_shutdown_weeks=partial_shutdown_weeks,
-            row_demand=cand_row_demand,
+            eu_demand=cand_eu_demand,
             row_cap=params.row_cap,
             params=params,
         )

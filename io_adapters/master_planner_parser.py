@@ -16,15 +16,24 @@ touches openpyxl.
 
 from __future__ import annotations
 
-import hashlib
 import io
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from numbers import Real
 from typing import Any
 
 import openpyxl
 
+from domain.site_codes import (
+    LEADING_ACCOUNT,
+    LEADING_GENERATED,
+    CodeDeduplicator,
+    assign_code,
+    generated_code,
+    leading_generated_code,
+    normalize_header,
+)
 from domain.week_anchor import AnchoredWindow, DatedRow, anchor_window
 
 HEADER_ROW = 2
@@ -43,12 +52,10 @@ NON_CUSTOMER_FRAGMENTS = (
     "reception", "release", "sampling", "schedule",
 )
 
-_LEADING_NUM = re.compile(r"^(\d+)")
-
-# A generated code already written into the header by the annotator. Kept in sync
-# with ``domain.site_derivation._LEADING_GENERATED``; matched here so an annotated
-# workbook yields the same identifier the converter assigned.
-_LEADING_GENERATED = re.compile(r"^\s*(RF-[0-9a-fA-F]{6,})")
+# Code patterns are shared with the converter via domain.site_codes rather than
+# "kept in sync" by hand, which is what they were before.
+_LEADING_NUM = LEADING_ACCOUNT
+_LEADING_GENERATED = LEADING_GENERATED
 
 
 @dataclass
@@ -85,20 +92,22 @@ class MasterPlannerData:
 
 
 def _normalize(text: str) -> str:
-    """Lowercase, strip punctuation, collapse whitespace — the stable-ID key."""
-    no_punct = re.sub(r"[^\w\s]", "", str(text).strip().lower())
-    return re.sub(r"\s+", " ", no_punct).strip()
+    """Lowercase, strip punctuation, collapse whitespace — the stable-ID key.
+
+    Delegates to :func:`domain.site_codes.normalize_header` so the hash input is
+    identical on both sides; a divergence here would silently change generated
+    codes between the two readers.
+    """
+    return normalize_header(text)
 
 
 def assign_stable_id(header: str, digest_len: int = 8) -> str:
     """Return a deterministic ``RF-<hash>`` id derived from the column header.
 
-    The same header always yields the same identifier, so re-parsing the same
-    workbook (or the team reusing the shared id) is stable across runs.
+    Delegates to :func:`domain.site_codes.generated_code`. Retained as a public
+    name because the converter and several tests import it from here.
     """
-    key = _normalize(header)
-    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:digest_len]
-    return f"RF-{digest}"
+    return generated_code(header, digest_len)
 
 
 def _customer_name(header: str) -> str:
@@ -134,12 +143,24 @@ def _to_date(value: Any):
 def _is_schedule_mark(value: Any) -> bool:
     """True when a customer cell marks one scheduled generator.
 
-    The Master Planner marks a scheduled generator with the integer 1. Booleans
-    are excluded explicitly (``True == 1`` in Python).
+    The Master Planner marks a scheduled generator with 1. Any numeric 1 counts —
+    ``1`` and ``1.0`` are the same mark to a planner, and openpyxl's type depends
+    on how Excel happened to store the cell and whether the value came from a
+    formula.
+
+    Accepting only ``int`` was a real asymmetry: ``Total Commercial`` goes through
+    ``_to_int``, which accepts floats, so a float-typed mark was counted in the
+    aggregate but dropped from that customer's schedule. The per-customer total
+    then disagreed with the column total, which shows up as phantom changed weeks.
+
+    Booleans are still excluded explicitly, since ``True == 1`` in Python but a
+    checkbox is not a scheduled generator.
     """
     if isinstance(value, bool):
         return False
-    return isinstance(value, int) and value == 1
+    if isinstance(value, Real):
+        return float(value) == 1.0
+    return False
 
 
 def _to_int(value: Any) -> tuple[int, bool]:
@@ -222,8 +243,19 @@ class MasterPlannerParser:
         if sheet_note:
             data.issues.append(sheet_note)
 
-        # Identify customer columns and their identifiers
+        # Identify customer columns and their identifiers.
+        #
+        # Codes come from domain.site_codes, the same module the converter uses,
+        # and duplicates are suffixed by the same CodeDeduplicator walking columns
+        # in the same left-to-right order. Both readers therefore agree.
+        #
+        # Previously this used ``setdefault`` and summed marks, so two columns
+        # sharing an account number collapsed into one entry holding both
+        # hospitals' schedules — while the converter emitted ``00460`` and
+        # ``00460-2``. The renamed site matched nothing and was reported as a new
+        # customer, and the survivor was compared against an interleaved schedule.
         customer_cols: dict[int, str] = {}
+        dedup = CodeDeduplicator()
         for idx, raw_header in enumerate(header):
             if idx in col_index.values():
                 continue
@@ -232,17 +264,17 @@ class MasterPlannerParser:
                     data.ignored_columns.append(str(raw_header).strip())
                 continue
             text = str(raw_header).strip()
-            explicit = _LEADING_GENERATED.match(text)
-            match = _LEADING_NUM.match(text)
-            if explicit:
-                # A code already written into the header is authoritative. Reading
-                # it literally is the whole point of annotating the workbook: the
-                # code then survives edits to the surrounding header text.
-                site_id = explicit.group(1)
-            elif match:
-                site_id = match.group(1)
-            else:
-                site_id = assign_stable_id(text)
+            assignment = assign_code(text)
+
+            site_id, renamed = dedup.assign(assignment.code)
+            if renamed:
+                data.issues.append(CodeDeduplicator.rename_note(
+                    assignment.code, site_id
+                ))
+
+            if assignment.was_generated and not leading_generated_code(text):
+                # Hashed from the header text rather than read from it, so the
+                # planning team needs the mapping to make it permanent.
                 data.assigned_ids.append(
                     AssignedId(
                         generated_id=site_id,
@@ -252,7 +284,7 @@ class MasterPlannerParser:
                     )
                 )
             customer_cols[idx] = site_id
-            data.customer_headers.setdefault(site_id, text)
+            data.customer_headers[site_id] = text
 
         # Choose the year window
         # ``rows`` already excludes the header and every row without a week

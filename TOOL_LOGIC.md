@@ -16,6 +16,7 @@ it says so.
 5. [How conflicting constraints are resolved](#5-how-conflicting-constraints-are-resolved)
 6. [Optimization methodology](#6-optimization-methodology)
 7. [The objective function and weighting](#7-the-objective-function-and-weighting)
+   — including §7.3, why `overtime_rate` is not the overtime lever
 8. [What "best" means, and worked scenarios](#8-what-best-means-and-worked-scenarios)
 9. [Complete parameter reference](#9-complete-parameter-reference)
 10. [Development methodology, backlog and roadmap](#10-development-methodology-backlog-and-roadmap)
@@ -413,12 +414,24 @@ minimise   sum over weeks of
                     ( 700,000 x units late                        )
     + w_overtime x  ( 2,000 if a third batch runs                 )
     + w_capacity x  ( 15,000 x unused slots that week             )
-
-    + w_quota    x  ( 50,000 x mCi short of any full quarter      )
 ```
 
 Unused slots are measured against 30 in a normal week and 15 in a partial-shutdown
 week. Shutdown weeks are excluded — no capacity was expected.
+
+**The quarterly quota shortfall is not in this function.** Supplier allocation runs
+*after* the plan is solved, so the solver cannot trade a shortfall against anything
+else. It is reported separately as an advisory:
+
+| Figure | Contents |
+|---|---|
+| `total_composite_cost` | the function above — what the solver actually minimised |
+| `total_quota_penalty_cost` | `50,000 x mCi short of any full quarter`, computed post-solve |
+| `total_cost_with_quota` | the two combined, weighted by `w_quota` |
+
+Previously the shortfall was added into the composite while the manual-plan
+baseline never computed it at all, which made a plan compared against *itself*
+report a $2bn loss. Both sides now compute it the same way.
 
 ### 7.2 The weights
 
@@ -432,7 +445,72 @@ cheapest overall":
 | `w_capacity = 0` | What is the cheapest plan ignoring idle capacity? |
 | `w_penalty = 0` | How full can I keep the factory regardless of holding cost? |
 
-### 7.3 An important property of the weighting
+### 7.3 The capacity term is also the overtime control
+
+This is the single most important property of the objective, and it is not obvious
+from the formula.
+
+Because total production is pinned to total demand by the zero-terminal-inventory
+rule, the capacity term splits exactly into two parts:
+
+```
+capacity  =  15,000 x ( nominal slots - total demand )       <- a constant
+           + 15,000 x ( units produced above 30 in a week )  <- the only part a plan changes
+```
+
+The first part is arithmetic: identical for every feasible plan. It is reported as
+`total_capacity_floor_cost`. The second, `total_capacity_levelling_cost`, is an
+**undeclared overtime surcharge of $15,000 per unit** — 7.5x the declared
+`overtime_rate` of $2,000 per week.
+
+The consequence, measured on identical demand:
+
+| Configuration | Overtime weeks chosen |
+|---|---|
+| `capacity_rate = 0`, `overtime_rate` swept $0 to $20,000 | 26, 26, 26 — no response |
+| `capacity_rate = 0`, `overtime_rate = $200,000` | 1 |
+| `overtime_rate` at default, `capacity_rate` $0 to $15,000 | 26 to 1 |
+
+**`overtime_rate` has to reach 100x its default before it changes any decision.**
+`capacity_rate` alone suppressed 25 of 26 overtime weeks, buying $1.75M of holding
+stock to do it. So if you want to control how willing the tool is to run overtime,
+**`capacity_rate` is the lever** — lower it to weaken the surcharge, or set it to
+`0` to remove it entirely and let `overtime_rate` decide.
+
+A worked sweep on the reference data:
+
+| `capacity_rate` | Overtime weeks | Holding cost | Idle slot-weeks |
+|---|---|---|---|
+| $15,000 (default) | 0 | $889,000 | 440 |
+| $7,000 | 1 | $826,000 | 445 |
+| $1 | 6 | $546,000 | 485 |
+| $0 | 6 | $546,000 | 485 |
+
+Note the idle-slot column bottoms out at **440** and stops. That figure is
+`30 x 52 - total demand` and no plan can beat it: filling an idle slot needs an
+order, not a better schedule. So "optimising for capacity" can only ever mean
+eliminating overtime, which is worth 45 slot-weeks here and costs $343,000 in extra
+holding to achieve.
+
+The levelling term is not wrong: concentrating production into overtime weeks
+genuinely does leave slots idle in other weeks. But nobody chose $15,000 per unit
+as an overtime deterrent — it was chosen as an idle-slot cost — so the figure is
+now reported in both halves, and the Settings tab states the effective cost of a
+full overtime week ($227,000 at defaults) next to the rate itself.
+
+One correction to an earlier version of this section: the surcharge does **not**
+land on the overtime week. That week's capacity cost is exactly $0, because it has
+no idle slots. The charge appears on the weeks that end up emptier as a
+consequence, since total output is pinned to demand. The total works out to
+`capacity_rate x overtime units` either way, but it is worth knowing where the
+money actually shows up when reading the weekly plan.
+
+Utilisation is also reported as a **slot count** (`Idle_Slots` per week,
+`total_idle_slots` / `unavoidable_idle_slots` / `overtime_units` for the horizon),
+independent of every cost rate. That way "how much capacity did we lose" is a fact
+about the factory rather than a function of a price someone typed in.
+
+### 7.4 Scale of the capacity term
 
 Because unused capacity is charged at $15,000 against a holding cost of $7,000, **the
 capacity term is the largest by a wide margin** on your data. Measured on
@@ -448,7 +526,8 @@ total      $4,332,000
 
 That ratio drives behaviour: the tool would rather build a generator early and hold
 it than leave a slot idle. Whether that reflects your economics is worth confirming —
-it follows directly from A4 and A6 in §1.
+it follows directly from A4 and A6 in §1, and per §7.3 it is also what decides how
+much overtime the tool is willing to run.
 
 ---
 
@@ -458,6 +537,8 @@ it follows directly from A4 and A6 in §1.
 
 "Best" means **lowest weighted total cost** as defined in §7, subject to every hard
 constraint in §4.1. Ties break toward fewer overtime weeks, then fewer batches.
+Note this excludes the quarterly quota advisory, which is computed after the plan is
+fixed and therefore cannot be part of what "best" optimises.
 
 It explicitly does *not* mean smoothest schedule, fewest changes from your manual
 plan, or highest utilisation. Smoothing is a *consequence* of the capacity term, not

@@ -59,7 +59,20 @@ def _build_params_rows(
         ("late_penalty_multiplier", params.late_penalty_multiplier, "Multiplier on penalty_rate for backlog"),
         ("late_penalty_rate", params.late_penalty_rate, "Effective backlog penalty rate (derived)"),
         ("overtime_rate", params.overtime_rate, "USD per overtime week (3rd batch)"),
-        ("capacity_rate", params.capacity_rate, "USD per unused good unit slot per week"),
+        ("capacity_rate", params.capacity_rate,
+         "USD charged for each production slot the plan leaves empty, per week"),
+        # The number a planner actually needs when setting overtime_rate. Under the
+        # 'normal' baseline each overtime unit also forgoes a capacity_rate idle
+        # credit, so the true marginal cost of a full overtime week is
+        # overtime_rate + 15 x capacity_rate -- $227,000 at defaults, not $2,000.
+        # Sweeping overtime_rate alone therefore changes nothing, which is why this
+        # is exported rather than left for a reader to derive.
+        ("real_cost_of_one_overtime_week",
+         params.effective_overtime_deterrent(params.overtime_units_per_week),
+         f"What one full overtime week actually costs: the overtime rate plus "
+         f"{params.overtime_units_per_week} normal slots left empty elsewhere. "
+         f"This, not overtime_rate alone, is what the plan weighs against holding "
+         f"stock early"),
         ("w_penalty", params.w_penalty, "Weight for penalty cost component"),
         ("w_overtime", params.w_overtime, "Weight for overtime cost component"),
         ("w_capacity", params.w_capacity, "Weight for capacity utilization cost component"),
@@ -101,15 +114,42 @@ def _build_params_rows(
         ])
 
     rows.extend([
-        ("total_composite_cost_usd", summary.get("total_composite_cost", ""), "Total composite cost across horizon"),
+        ("total_composite_cost_usd", summary.get("total_composite_cost", ""),
+         "Total optimized objective across horizon (penalty + overtime + capacity). "
+         "Excludes the quota advisory, which the solver could not act on"),
         ("total_penalty_cost_usd", summary.get("total_penalty_cost", ""), "Total penalty cost across horizon"),
         ("total_overtime_cost_usd", summary.get("total_overtime_cost", ""), "Total overtime cost across horizon"),
-        ("total_capacity_cost_usd", summary.get("total_capacity_cost", ""), "Total capacity utilization cost across horizon"),
+        ("total_capacity_cost_usd", summary.get("total_capacity_cost", ""),
+         "Cost of unfilled production slots across the horizon (the two lines "
+         "below add up to this)"),
         ("overtime_weeks", summary.get("overtime_weeks", ""), "Number of weeks with 3rd batch"),
     ])
+
+    # The two halves of the capacity component. Splitting them is the point: the
+    # floor is arithmetic and identical for every plan with this demand total,
+    # while the levelling part is capacity_rate per overtime unit -- the part that
+    # actually drives the overtime-versus-hold decision.
+    if "total_capacity_floor_cost" in summary:
+        rows.extend([
+            ("unavoidable_idle_cost_usd", summary["total_capacity_floor_cost"],
+             "Empty slots caused by demand being below factory capacity. The same "
+             "for every possible plan; not a planning failure"),
+            ("overtime_surcharge_usd",
+             summary.get("total_capacity_levelling_cost", 0.0),
+             "Empty normal slots left behind by overtime production. The only part "
+             "of unused capacity a plan can change"),
+        ])
+
     if "total_quota_penalty_cost" in summary:
         rows.append(("total_quota_penalty_cost_usd", summary["total_quota_penalty_cost"],
-                     "Total quarterly quota shortfall penalty"))
+                     "Quarterly quota shortfall penalty (ADVISORY: computed after "
+                     "the solve, so it did not influence the plan)"))
+    if "total_cost_with_quota" in summary:
+        rows.append(("total_cost_with_quota_usd", summary["total_cost_with_quota"],
+                     "Optimized objective plus the weighted quota advisory"))
+    for index, warning in enumerate(summary.get("quota_structural_warnings", []), 1):
+        rows.append((f"quota_structural_warning_{index}", warning,
+                     "Structural quota problem the optimizer could not act on"))
     return rows
 
 

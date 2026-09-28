@@ -60,7 +60,7 @@ def test_solver_identical_with_eu_demand_none_on_full_dataset(sites_csv):
     row_demand = build_weekly_row_demand(active, p)
 
     plan_a, sum_a = solve_plan_integrated(demand, [], [], row_demand, p.row_cap, p)
-    plan_b, sum_b = solve_plan_integrated(demand, [], [], row_demand, p.row_cap, p, eu_demand=None)
+    plan_b, sum_b = solve_plan_integrated(demand, [], [], row_demand, p.row_cap, p)
     assert sum_a == sum_b
     pd.testing.assert_frame_equal(plan_a, plan_b)
 
@@ -74,7 +74,7 @@ def test_enforced_plan_carries_inventory_into_high_eu_week():
     eu_demand = _demand(8, {6: 4})
 
     plan, summary = solve_plan_integrated(
-        demand, [], [], row_demand, row_cap=2, params=p, eu_demand=eu_demand
+        demand, [], [], eu_demand, row_cap=2, params=p
     )
     # Net inventory at end of week 5 must be >= excess (2)
     inv_wk5 = int(plan.loc[plan["Week"] == 5, "Net_Inventory_End"].iloc[0])
@@ -87,6 +87,6 @@ def test_enforced_plan_still_meets_terminal_zero():
     row_demand = _demand(8, {6: 4})
     eu_demand = _demand(8, {6: 4})
     plan, _ = solve_plan_integrated(
-        demand, [], [], row_demand, row_cap=2, params=p, eu_demand=eu_demand
+        demand, [], [], eu_demand, row_cap=2, params=p
     )
     assert int(plan.loc[plan["Week"] == 8, "Net_Inventory_End"].iloc[0]) == 0

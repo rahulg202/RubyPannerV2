@@ -114,7 +114,10 @@ def test_compare_plans_negative_saving_preserved():
 def test_compare_plans_has_all_components():
     rows = compare_plans({}, {})
     labels = {r["Component"] for r in rows}
-    assert labels == {"Penalty", "Overtime", "Capacity Utilization", "Total Composite"}
+    assert labels == {
+        "Penalty", "Overtime", "Capacity Utilization",
+        "Quota Shortfall (advisory)", "Total",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +245,7 @@ def test_optimizer_own_plan_is_judged_feasible_by_the_baseline():
     eu = _arr(8, {3: 4, 6: 3})        # two weeks that force a pre-build
 
     plan_df, summary = solve_plan_integrated(
-        demand, [], [], eu, p.row_cap, p, eu_demand=eu
+        demand, [], [], eu, p.row_cap, p
     )
     y = [0] + plan_df["Good_Production"].tolist()
 
@@ -267,7 +270,7 @@ def test_a_feasible_manual_plan_never_beats_the_optimum():
     eu = _arr(8, {3: 4, 6: 3})
 
     _plan_df, summary = solve_plan_integrated(
-        demand, [], [], eu, p.row_cap, p, eu_demand=eu
+        demand, [], [], eu, p.row_cap, p
     )
 
     # A hand-built plan, legal by construction: 2 units held at the end of week 2

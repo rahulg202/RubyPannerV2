@@ -33,6 +33,7 @@ class IntegratedParams:
 
     def __post_init__(self) -> None:
         _validate_weights(self.w_penalty, self.w_overtime, self.w_capacity)
+        _validate_batch_params(self)
 
     # ------------------------------------------------------------------
     # Derived properties
@@ -42,6 +43,11 @@ class IntegratedParams:
     def late_penalty_rate(self) -> float:
         """Penalty rate applied to backlog (last-resort late delivery)."""
         return self.penalty_rate * self.late_penalty_multiplier
+
+    @property
+    def min_good_per_batch(self) -> int:
+        """Fewest good units a batch can yield (after the test discard)."""
+        return self.min_batch_produced - self.test_discard_per_batch  # 1
 
     @property
     def max_good_per_batch(self) -> int:
@@ -58,6 +64,35 @@ class IntegratedParams:
         """Maximum good units in an overtime week (3 batches × 15)."""
         return self.overtime_max_batches * self.max_good_per_batch  # 45
 
+    # ------------------------------------------------------------------
+    # Disclosure
+    # ------------------------------------------------------------------
+
+    def effective_overtime_deterrent(self, units_above_normal: int) -> float:
+        """What the solver actually charges to push a week past the normal ceiling.
+
+        ``overtime_rate`` alone is not that number under the default capacity
+        baseline: each unit above the ceiling also forgoes a ``capacity_rate``
+        idle-slot credit, so the true marginal cost is
+
+            overtime_rate + capacity_rate * units_above_normal
+
+        At defaults a full overtime week (15 units above the ceiling) costs
+        $227,000, not the $2,000 the overtime setting suggests. Surfaced in the
+        Settings tab and the exported ``Model_Params`` sheet so the figure is
+        discoverable rather than something a reviewer has to derive.
+
+        Set ``capacity_rate`` to zero and the declared rate is the whole story.
+        """
+        units = max(0, int(units_above_normal))
+        if units == 0:
+            return 0.0
+        return self.overtime_rate + self.capacity_rate * units
+
+    @property
+    def overtime_units_per_week(self) -> int:
+        """Units a fully-loaded overtime week adds above the normal ceiling."""
+        return max(0, self.overtime_max_good_week - self.normal_max_good_week)
 
 
 def _validate_weights(w_penalty: float, w_overtime: float, w_capacity: float) -> None:
@@ -80,6 +115,51 @@ def _validate_weights(w_penalty: float, w_overtime: float, w_capacity: float) ->
             "All weights (w_penalty, w_overtime, w_capacity) are 0.0. "
             "At least one weight must be non-zero to define an optimization objective."
         )
+
+
+def _validate_batch_params(p: "IntegratedParams") -> None:
+    """Validate the batch-size settings are internally coherent.
+
+    ``min_batch_produced`` was previously exposed in Settings, written into the
+    exported ``Model_Params`` sheet, and enforced nowhere — so the sheet asserted
+    a constraint the plan never obeyed. Now that the solver honours it (see
+    ``domain.demand.realisable_good_levels``), incoherent values have to be
+    rejected up front rather than producing an empty search space deep inside the
+    DP.
+    """
+    if p.min_batch_produced < 1:
+        raise ValueError(
+            f"'min_batch_produced' must be >= 1, got {p.min_batch_produced}."
+        )
+    if p.test_discard_per_batch < 0:
+        raise ValueError(
+            f"'test_discard_per_batch' must be >= 0, got {p.test_discard_per_batch}."
+        )
+    if p.min_batch_produced > p.max_batch_produced:
+        raise ValueError(
+            f"'min_batch_produced' ({p.min_batch_produced}) cannot exceed "
+            f"'max_batch_produced' ({p.max_batch_produced})."
+        )
+    if p.test_discard_per_batch >= p.min_batch_produced:
+        raise ValueError(
+            f"'test_discard_per_batch' ({p.test_discard_per_batch}) must be less "
+            f"than 'min_batch_produced' ({p.min_batch_produced}), otherwise a "
+            f"batch can yield no sellable generator."
+        )
+    if p.normal_max_batches < 1:
+        raise ValueError(
+            f"'normal_max_batches' must be >= 1, got {p.normal_max_batches}."
+        )
+    if p.overtime_max_batches < p.normal_max_batches:
+        raise ValueError(
+            f"'overtime_max_batches' ({p.overtime_max_batches}) cannot be less "
+            f"than 'normal_max_batches' ({p.normal_max_batches})."
+        )
+    if p.horizon_weeks < 1:
+        raise ValueError(f"'horizon_weeks' must be >= 1, got {p.horizon_weeks}.")
+    if p.row_cap < 0:
+        raise ValueError(f"'row_cap' must be >= 0, got {p.row_cap}.")
+
 
 @dataclass(frozen=True)
 class SupplierParams:

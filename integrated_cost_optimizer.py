@@ -140,12 +140,13 @@ def main() -> None:
 
     # Build demand arrays
     demand = build_weekly_demand(active_df, params)
-    row_demand = build_weekly_row_demand(active_df, params)
+    eu_demand = build_weekly_row_demand(active_df, params)
 
-    # Run solver
+    # Run solver. One EU-restricted demand array: the QC shipping cap is
+    # enforced from it, and it is the same figure the plan sheet reports.
     plan_df, summary = solve_plan_integrated(
         demand, shutdown_weeks, partial_shutdown_weeks,
-        row_demand, params.row_cap, params
+        eu_demand, params.row_cap, params
     )
 
     # Export results

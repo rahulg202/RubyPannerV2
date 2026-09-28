@@ -259,7 +259,11 @@ def render() -> None:
             _num("Overtime rate (USD per week)", "overtime_rate",
                  help_text="Cost of running a third batch in a week", step=100.0)
             _num("Capacity rate (USD per unused slot)", "capacity_rate",
-                 help_text="Cost charged per unused good-unit slot per week",
+                 help_text="Cost charged for each production slot the plan leaves "
+                           "empty, per week. Also acts as a per-unit surcharge on "
+                           "overtime, since an overtime generator leaves a standing "
+                           "slot empty elsewhere. Set to 0 to remove that surcharge "
+                           "and let the overtime rate decide on its own",
                  step=100.0)
         with col2:
             st.caption(

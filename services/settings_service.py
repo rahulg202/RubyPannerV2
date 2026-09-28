@@ -8,7 +8,8 @@ so a single settings change flows consistently to every workflow (Requirement
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+from dataclasses import dataclass, field, fields
 from datetime import date
 
 from domain.errors import ValidationError
@@ -30,6 +31,66 @@ class Settings:
     partial_shutdown_weeks: tuple[int, ...] = ()
     reference_week_date: date | None = None
     calibration_offset_days: int = 4
+
+    @property
+    def fingerprint(self) -> str:
+        """Stable digest of every validated value.
+
+        Results are snapshots of the settings that produced them. Comparing a plan
+        solved under one set of cost rates against a baseline evaluated under
+        another produces a number that describes nothing — and that was reachable,
+        because ``clear_results`` fires on file upload and on *Restore defaults*
+        but not on an individual setting change.
+
+        Hooking all 31 widgets would be fragile and easy to forget. Stamping each
+        result with this digest and refusing a mismatch makes a missed
+        invalidation visible instead of silent.
+
+        The walk uses ``dataclasses.fields`` rather than a hand-written key list,
+        so a newly added parameter is covered without anyone remembering to update
+        the hash. ``tests/services/test_settings_fingerprint.py`` asserts that
+        every key in ``DEFAULTS`` genuinely moves the digest.
+        """
+        return hashlib.sha1(self._canonical().encode("utf-8")).hexdigest()[:16]
+
+    def _canonical(self) -> str:
+        """Deterministic serialisation: sorted keys, stable scalar formatting."""
+        items: list[tuple[str, str]] = []
+
+        for prefix, bundle in (("p", self.params), ("s", self.supplier_params)):
+            for f in fields(bundle):
+                items.append(
+                    (f"{prefix}.{f.name}", _scalar(getattr(bundle, f.name)))
+                )
+
+        items.extend([
+            ("sheet", _scalar(self.sheet)),
+            ("shutdown_weeks", _scalar(self.shutdown_weeks)),
+            ("partial_shutdown_weeks", _scalar(self.partial_shutdown_weeks)),
+            ("reference_week_date", _scalar(self.reference_week_date)),
+            ("calibration_offset_days", _scalar(self.calibration_offset_days)),
+        ])
+
+        return "|".join(f"{key}={value}" for key, value in sorted(items))
+
+
+def _scalar(value) -> str:
+    """Format a settings value so equal values always serialise identically.
+
+    Floats go through ``repr`` so ``7000`` and ``7000.0`` do not collide into
+    different digests for what the UI treats as the same number.
+    """
+    if value is None:
+        return "~"
+    if isinstance(value, bool):
+        return "T" if value else "F"
+    if isinstance(value, float):
+        return repr(float(value))
+    if isinstance(value, (list, tuple)):
+        return ",".join(_scalar(v) for v in value)
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
 
 
 # ---------------------------------------------------------------------------

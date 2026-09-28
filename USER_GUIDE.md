@@ -188,18 +188,60 @@ The optimizer adds up four costs and finds the cheapest plan. These set the pric
 |---|---|---|
 | **Early penalty rate** | $7,000 | Cost of holding one finished generator in the warehouse for one week because it was made before it was needed. |
 | **Late penalty multiplier** | 100 | How much worse late is than early. At 100, being one week late costs $700,000 per generator — deliberately extreme so the optimizer treats late delivery as a last resort. |
-| **Overtime rate** | $2,000 | Cost of running a third batch in a week. |
-| **Capacity rate** | $15,000 | Charged per unused generator slot per week, to discourage leaving the factory idle. |
+| **Overtime rate** | $2,000 | Cost of running a third batch in a week. **Read the box below — this is not the full cost of overtime.** |
+| **Capacity rate** | $15,000 | Charged for each production slot the plan leaves empty, per week. |
 
 The four **weights** (0 to 1) scale each cost in the objective. Set one to 0 to make
 the optimizer ignore that cost entirely. At least one must be above 0.
 
-> **Worth knowing about the capacity weight.** On your demand levels the capacity
-> cost is mostly a fixed floor — demand simply does not fill the factory every week,
-> and no plan can change that. Leaving the capacity weight at 1 means a large,
-> mostly-unavoidable number sits in the total and can hide the penalty savings the
-> optimizer actually found. If you want to see the improvement clearly, set the
-> capacity weight to 0 and compare.
+#### The one thing to understand about these two prices
+
+Your factory has **30 generator slots a week** as standing capacity (2 batches).
+Overtime adds a 3rd batch, up to 45.
+
+Here is the part that surprises people. Generators made on that 3rd batch **do not
+use up your standing capacity**. And because you only ever make what customers
+ordered, every generator made on overtime is one you are *not* making in some other
+week — so that other week ends up with an empty slot, and empty slots are charged.
+
+So a full overtime week costs:
+
+| | |
+|---|---|
+| Overtime rate | $2,000 |
+| 15 normal slots left empty elsewhere, at $15,000 each | $225,000 |
+| **Real cost of one overtime week** | **$227,000** |
+
+**This is why the tool almost never runs overtime.** It would rather make generators
+early and hold them in the warehouse, because holding costs $7,000 per generator per
+week — far cheaper than $227,000.
+
+Two consequences worth knowing:
+
+1. **Changing the overtime rate on its own will barely change your plan.** At $2,000
+   it is under 1% of the real cost. Tested: raising it to $20,000 changed no decision
+   at all. The **capacity rate** is the lever that controls overtime.
+2. **The Settings tab shows the real figure** underneath these two fields and updates
+   as you change them. Trust that number over the overtime rate.
+
+If overtime genuinely costs you a few thousand in labour rather than $227,000, lower
+the **capacity rate**. Setting it to `0` removes the surcharge completely and leaves
+the overtime rate deciding on its own. Setting it to `$1` keeps a readable figure —
+the unused-capacity total then reads as a straight count of empty slot-weeks. Either
+way this will change your plans, so agree it with the team first.
+
+**Your utilisation figures do not depend on this at all.** The Cost Optimizer tab
+reports idle slot-weeks as a count, split into the part fixed by demand and the part
+caused by overtime, and those numbers stay the same whatever you set the rates to.
+
+> **Worth knowing about the capacity weight.** Most of the capacity cost is a fixed
+> floor — demand simply does not fill the factory every week, and no plan can change
+> that. The Cost Optimizer tab splits the figure into *unavoidable* and *overtime
+> surcharge* so you can see which part is which. Leaving the capacity weight at 1
+> means a large, mostly-unavoidable number sits in the total and can hide the penalty
+> savings the optimizer actually found. Setting it to 0 shows the improvement clearly
+> — but note it also removes the overtime deterrent described above, so the plan will
+> start running overtime freely.
 
 ### QC shipping cap
 
@@ -539,13 +581,16 @@ the input file from the Master Planner is the cleanest way to run this compariso
 | **Net_Inventory_End** | Stock at week end. Positive = finished generators waiting. Negative = unmet demand. |
 | **Early_Units_Held** | Finished generators held in the warehouse this week, waiting for their due date. Drives the penalty cost. |
 | **Late_Units_Backlog** | Generators that should have shipped and haven't. Charged at the much higher late rate. |
-| **ROW_Demand_Due** | Demand this week from Denmark, the UK, the Netherlands and Sweden. |
-| **ROW_Fulfilled** | How much of that was served, capped by the QC shipping cap. |
-| **ROW_Inventory** | Restricted-country stock carried into next week. |
+| **EU_Restricted_Due** | Generators due this week for Denmark, the UK, the Netherlands and Sweden. |
+| **EU_Shipping_Cap** | The most that can ship to those countries in one week. |
+| **EU_Prebuild_Required** | How many of this week's restricted deliveries had to be made earlier, because they cannot all ship at once. `EU_Restricted_Due` minus the cap. |
+| **EU_Prebuild_Available** | Stock on hand at the end of last week, which is what covers the line above. |
 | **Penalty_Cost_USD** | Early and late penalty for this week. |
 | **Overtime_Cost_USD** | Overtime cost for this week. |
-| **Capacity_Utilization_Cost_USD** | Unused-slot cost for this week. |
-| **Composite_Cost_USD** | The three above, with weights applied. |
+| **Capacity_Utilization_Cost_USD** | Cost of production slots this week's plan left empty. The two lines below add up to this. |
+| **Unavoidable_Idle_Cost_USD** | Empty slots you cannot avoid, because customers order less than the factory can make. The same for every possible plan — not a planning failure. |
+| **Overtime_Surcharge_USD** | Generators made on a 3rd batch don't use up your standing 2-batch capacity, so each one leaves a normal slot empty elsewhere in the year — and that empty slot is charged here. This is the extra cost of overtime on top of the overtime rate, and it is the only part of unused capacity the plan can change. |
+| **Composite_Cost_USD** | Penalty, overtime and capacity for this week, with weights applied. |
 | **Cumulative_Composite_Cost_USD** | Running total from week 1. |
 | **Curium_Good** | Sellable generators from Curium material this week. |
 | **BWXT_Good** | Sellable generators from BWXT material this week. |

@@ -78,7 +78,7 @@ Master Planner, so this contract rarely has to be satisfied by hand.
 
 | Sheet | Contents |
 |---|---|
-| `Weekly_Plan` | Week, manufacturing and calibration dates, production, batches, inventory, supplier allocation, Sr-82 activity, costs |
+| `Weekly_Plan` | Week, manufacturing and calibration dates, production, batches, inventory, EU-restricted shipping-cap columns, supplier allocation, Sr-82 activity, costs |
 | `Sites_Clean` | The validated active sites used |
 | `Input_Issues` | Data-quality problems found on load |
 | `Model_Params` | Every parameter used, so a run is reproducible |
@@ -113,10 +113,29 @@ comfortably above quota, so no shortfall penalty was triggered.
 
 ## Things worth knowing
 
-- **Unused-capacity cost is mostly a fixed floor.** Annual demand sits well below
-  annual capacity, so some weeks are always under-filled regardless of the plan.
-  A high capacity weight can therefore mask large penalty savings. Read the
-  penalty and overtime components when judging the optimizer's value.
+- **Unused-capacity cost is a fixed floor *plus a hidden overtime surcharge*.**
+  Annual demand sits well below annual capacity, so some weeks are always
+  under-filled regardless of the plan. That part is arithmetic and is reported as
+  `total_capacity_floor_cost`. What is left over — `total_capacity_levelling_cost`
+  — is exactly `capacity_rate` per unit produced above the normal weekly ceiling,
+  because a unit made on overtime cannot credit back against an idle slot
+  elsewhere.
+
+  That matters more than it sounds. It means **the declared `overtime_rate` is not
+  the overtime lever**: at defaults a full overtime week really costs
+  `2,000 + 15 x 15,000 = $227,000`, so sweeping `overtime_rate` from $0 to $20,000
+  changes no decision while `capacity_rate` alone flips 25 of 26 overtime weeks.
+  The Settings tab and the `Model_Params` sheet both state the effective figure.
+
+  `capacity_rate` is the dial: lower it to weaken the surcharge, or set it to `0`
+  to remove it and leave `overtime_rate` as the only overtime lever. The default of
+  $15,000 is unchanged, so existing plans do not move.
+- **Utilisation is reported as a slot count, not only as money.**
+  `total_idle_slots`, `unavoidable_idle_slots` and `overtime_units` are independent
+  of every cost rate, so "how full was the factory" is answerable without first
+  agreeing what a slot is worth and does not appear to change when a rate is
+  edited. `unavoidable_idle_slots` is fixed by demand versus factory size — no plan
+  and no pricing can improve it.
 - **A generator produced early still counts as a changed week.** A unit due in
   week 10 but made in week 8 and held in stock appears in `Changed_Weeks`, because
   the production week moved even though the customer is served on time.
@@ -124,17 +143,48 @@ comfortably above quota, so no shortfall penalty was triggered.
   totals; `delivery_assignment` then hands anonymous generators to customers. Among
   sites due the same week, the attribution is deterministic but arbitrary. Totals are
   reliable; a single row is indicative.
-- **Supplier allocation happens after the solve.** `solve_with_suppliers` runs the DP
-  first, then applies the run-sequencing rule. So changing that rule alters the
-  Curium/BWXT split and the Sr-82 totals but leaves the production plan and the total
-  cost untouched. If supplier economics should influence *which* weeks produce what,
-  that is a change of scope.
+- **Supplier allocation happens after the solve, so the quota shortfall is an
+  advisory.** `solve_with_suppliers` runs the DP first, then applies the
+  run-sequencing rule. Changing that rule alters the Curium/BWXT split and the
+  Sr-82 totals but leaves the production plan untouched. Because the solver
+  therefore cannot trade a quota shortfall against anything,
+  `total_composite_cost` is the DP objective **only** and the shortfall is
+  reported separately:
+
+  | Key | Meaning |
+  |---|---|
+  | `total_composite_cost` | penalty + overtime + capacity — what the solver minimised |
+  | `total_quota_penalty_cost` | post-solve advisory the solver could not act on |
+  | `total_cost_with_quota` | the two combined, weighted by `w_quota` |
+
+  Folding the advisory into the composite while the manual-plan baseline never
+  computed it made a plan compared against *itself* report a $2bn loss. Both sides
+  now compute it by the same code path.
+
+  One structural case is worth knowing: Curium takes the whole week whenever
+  weekly output is at or below `first_run_allocation` (15), because a single-run
+  week has no second run for BWXT. On a plan averaging ~10 generators a week BWXT
+  receives nothing all year and breaches quota every quarter, and no plan the
+  solver can reach would change that. The run now says so explicitly rather than
+  leaving an unexplained figure. If supplier economics should influence *which*
+  weeks produce what, that is a change of scope.
 - **Interval 0 means one delivery.** Handled in `demand`, `delivery_assignment`,
   `onboarding` and the converter. Onboarding validation used to require `>= 1`, which
   silently made those customers impossible to evaluate.
 - **Onboarding search.** Up to 500 combinations are evaluated exhaustively and the
   result is the true optimum. Above that a heuristic runs and the app says so —
-  the answer is a strong candidate, not a proven optimum.
+  the answer is a strong candidate, not a proven optimum. (The fixed-plan mode
+  evaluates arithmetically rather than solving, so it affords a much larger
+  exhaustive threshold.)
+- **Onboarding ranks on marginal cost, not the whole-plan total.** Adding demand
+  always *reduces* the whole-plan cost, because every extra delivery cancels a
+  `capacity_rate` idle-slot charge. Since a later start week fits fewer deliveries
+  inside 52 weeks, ranking on the total simply recommended the earliest week in
+  every window — it was `-15,000 x deliveries_before_week_52` and nothing else.
+  Ranking now uses `delta_marginal` (penalty + overtime + the quota advisory), and
+  the tables show `Deliveries in horizon` beside the capacity delta so the
+  horizon-edge effect is visible. This matches what the fixed-plan mode always
+  did.
 
 ### Partial quarters and supplier quotas
 
@@ -179,6 +229,13 @@ than a routine cost.
 > The shortfall rate itself (`quota_shortfall_penalty_rate`, default
 > $50,000/mCi) is a **placeholder** set high to make a breach effectively
 > unacceptable, pending the real charge from the business.
+- **Both Master Planner readers share one code implementation.** Site-code
+  assignment, including duplicate `-2` suffixing, lives in
+  `domain/site_codes.py` and is called by the converter *and* the parser. Before,
+  the converter renamed a repeated account number to `00460-2` while the parser
+  merged both columns into one `00460` entry with their marks summed, so the
+  renamed site matched nothing and was reported as a new customer while the
+  survivor was compared against two hospitals' interleaved schedules.
 - **Master Planner matching.** Customers are matched by the leading account number
   in each Schedule-sheet column. Columns without one receive a stable generated
   identifier (`RF-…`) listed in `Assigned_IDs`; share that mapping with the
@@ -286,15 +343,15 @@ Notable domain modules:
 pytest
 ```
 
-680 tests, organised by layer:
+881 tests, organised by layer:
 
 | Suite | Tests | Covers |
 |---|---|---|
-| `tests/domain` | 311 | unit plus property-based |
-| `tests/io` | 114 | synthetic fixture workbooks — no customer data |
-| `tests/services` | 86 | orchestration against in-memory fake adapters |
-| `tests/ui` | 79 | smoke, layering guards, week-input conversions |
-| `tests/integration` | 63 | end-to-end, plus real-Streamlit render tests |
+| `tests/domain` | 431 | unit plus property-based |
+| `tests/io` | 126 | synthetic fixture workbooks — no customer data |
+| `tests/services` | 124 | orchestration against in-memory fake adapters |
+| `tests/ui` | 104 | smoke, layering guards, week-input conversions |
+| `tests/integration` | 69 | end-to-end, plus real-Streamlit render tests |
 
 Two things worth knowing before adding tests.
 

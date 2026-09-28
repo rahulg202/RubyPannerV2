@@ -24,6 +24,34 @@ def usd_signed(value: float | None) -> str:
     return f"{'-' if value < 0 else ''}${abs(value):,.0f}"
 
 
+# ---------------------------------------------------------------------------
+# Markdown-safe money
+# ---------------------------------------------------------------------------
+# Streamlit renders markdown with LaTeX support, so a pair of dollar signs on one
+# line is read as a maths expression: "$225,000 ... at $15,000" silently becomes
+# "225,000 ... at" typeset as maths, with both dollar signs consumed as
+# delimiters. One dollar sign renders fine, which is why the bug only shows up on
+# lines that quote two amounts.
+#
+# st.metric is not markdown-rendered, so plain ``usd`` is correct there. Anything
+# passed to st.markdown / st.info / st.caption / st.warning / st.success /
+# st.error must use the escaped variants below.
+
+def escape_dollars(text: str) -> str:
+    """Escape ``$`` so Streamlit markdown does not read it as maths."""
+    return text.replace("$", r"\$")
+
+
+def usd_md(value: float | None) -> str:
+    """:func:`usd`, safe to embed in Streamlit markdown."""
+    return escape_dollars(usd(value))
+
+
+def usd_signed_md(value: float | None) -> str:
+    """:func:`usd_signed`, safe to embed in Streamlit markdown."""
+    return escape_dollars(usd_signed(value))
+
+
 def pct(value: float | None) -> str:
     """Format a percentage, or 'n/a' when undefined (zero baseline)."""
     if value is None:
@@ -156,8 +184,16 @@ def rankings_frame(
         for sid in site_ids:
             row[f"{sid} week"] = week_label(opt.selected_weeks.get(sid), dates)
         row.update({
+            # The ranked figure comes first: penalty + overtime, the cost that
+            # actually responds to the start-week choice.
+            "Δ Marginal": usd_signed(getattr(opt, "delta_marginal", 0.0)),
             "Δ Penalty": usd_signed(opt.delta_penalty),
             "Δ Overtime": usd_signed(opt.delta_overtime),
+            # Deliveries this start week fits inside the 52 weeks. Shown next to
+            # Δ Capacity because it is the sole reason that column moves: each
+            # delivery cancels one idle-slot charge, so earlier start weeks look
+            # cheaper purely by fitting one more in before the horizon ends.
+            "Deliveries in horizon": getattr(opt, "generators_added", 0),
             "Δ Capacity": usd_signed(opt.delta_capacity),
             "Δ Composite": usd_signed(opt.delta_composite),
             "OT Weeks": opt.overtime_weeks,

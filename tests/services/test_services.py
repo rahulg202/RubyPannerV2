@@ -285,7 +285,10 @@ def test_comparison_service_returns_components():
     svc = ComparisonService(FakeMasterPlannerReader(planned))
     result = svc.run(_comparison_request())
     labels = {c["Component"] for c in result.components}
-    assert labels == {"Penalty", "Overtime", "Capacity Utilization", "Total Composite"}
+    assert labels == {
+        "Penalty", "Overtime", "Capacity Utilization",
+        "Quota Shortfall (advisory)", "Total",
+    }
     assert isinstance(result.baseline, BaselineResult)
 
 
@@ -458,7 +461,7 @@ def test_onboarding_service_returns_rankings():
     result = svc.run(_onboarding_request())
     assert result.search_space == 3
     assert result.used_heuristic is False
-    assert set(result.rankings) == {"penalty", "overtime", "capacity"}
+    assert set(result.rankings) == {"marginal", "penalty", "overtime"}
     assert result.rankings["penalty"], "expected at least one ranked option"
 
 

@@ -84,7 +84,7 @@ def test_three_customers_completes_within_time_budget(service):
 
 def test_rankings_present_for_every_objective(service):
     result = service.run(_request(_three_customers()))
-    for objective in ("penalty", "overtime", "capacity"):
+    for objective in ("marginal", "penalty", "overtime"):
         assert result.rankings[objective], f"no options ranked for {objective}"
         assert len(result.rankings[objective]) <= 5
 
@@ -105,7 +105,7 @@ def test_rankings_sorted_ascending_by_objective(service):
     for objective, field in (
         ("penalty", "delta_penalty"),
         ("overtime", "delta_overtime"),
-        ("capacity", "delta_capacity"),
+        ("marginal", "delta_marginal"),
     ):
         values = [getattr(o, field) for o in result.rankings[objective]]
         assert values == sorted(values)

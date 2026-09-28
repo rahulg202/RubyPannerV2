@@ -52,6 +52,10 @@ class OptimizeRequest:
     # Optional Master Planner, used to compare per-customer weeks and flag new sites
     master_planner_bytes: bytes | None = None
     master_planner_sheet: str = "Schedule"
+    # Digest of the settings this run was requested under. Stamped onto the result
+    # so a later comparison can refuse to mix generations. See
+    # services.settings_service.Settings.fingerprint.
+    settings_fingerprint: str = ""
 
 
 @dataclass
@@ -71,6 +75,10 @@ class OptimizationResult:
     # Row-level reconciliation against the manual plan (domain.site_matching).
     match_report: list = field(default_factory=list)
     match_summary: dict = field(default_factory=dict)
+    # Settings this result was produced under. A tab showing it must say so when
+    # the settings now in force differ, and the Comparison tab must refuse to
+    # compare across the difference.
+    settings_fingerprint: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -135,9 +143,20 @@ class ComparisonRequest:
     optimized_plan_df: pd.DataFrame
     demand: tuple[int, ...]
     params: IntegratedParams
+    # Needed so the manual plan's quarterly quota advisory is computed by the same
+    # path the optimized plan used. Omitting it makes the comparison asymmetric.
+    supplier_params: SupplierParams | None = None
     shutdown_weeks: tuple[int, ...] = ()
     partial_shutdown_weeks: tuple[int, ...] = ()
     master_planner_year: int | None = None
+    # Staleness guard. ``settings_fingerprint`` is the settings now in force;
+    # ``optimized_settings_fingerprint`` is what the stored plan was solved under.
+    # A mismatch means the two costs describe different models.
+    settings_fingerprint: str = ""
+    optimized_settings_fingerprint: str = ""
+    # Customer demand events, so EU-restricted volume is attributed to production
+    # weeks on the baseline side the same way it is on the optimized side.
+    demand_events: tuple = ()
     # Must match what the input file was anchored to, or per-customer weeks are
     # offset between the two files.
     reference_week_date: date | None = None

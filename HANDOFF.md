@@ -1,7 +1,8 @@
 # Session Handoff — Ruby Fill Optimizer
 
 **Updated:** 2026-08-31
-**State:** Three rounds of business feedback closed. 680 tests passing.
+**State:** Three rounds of business feedback closed, plus a correctness
+remediation covering ten defects. 881 tests passing.
 Deployed commit `05a51ff` on `origin/main`.
 
 Companion documents:
@@ -37,12 +38,13 @@ Run everything with `pytest`. Run the app with `streamlit run app.py`.
 
 | Suite | Tests | Notes |
 |---|---|---|
-| `tests/domain` | 311 | unit plus property-based |
-| `tests/io` | 114 | synthetic fixture workbooks, no customer data |
-| `tests/services` | 86 | in-memory fake adapters |
-| `tests/ui` | 79 | smoke, layering guards, week-input conversions |
-| `tests/integration` | 63 | end-to-end, plus real-Streamlit render tests |
-| **Total** | **680** | |
+| `tests/domain` | 431 | unit plus property-based |
+| `tests/io` | 126 | synthetic fixture workbooks, no customer data |
+| `tests/services` | 124 | in-memory fake adapters |
+| `tests/ui` | 104 | smoke, layering guards, week-input conversions |
+| `tests/integration` | 69 | end-to-end, plus real-Streamlit render tests |
+| `tests/` (legacy top level) | 27 | superseded onboarding entry points |
+| **Total** | **881** | |
 
 ---
 
@@ -101,28 +103,88 @@ Weeks display fixes. Week-number inputs replaced with dated pickers and date fie
 optimization methodology, objective function, full parameter reference, worked
 scenarios on the customer's own files, development methodology and roadmap.
 
+### Correctness remediation — delivered
+
+Spec: `.kiro/specs/correctness-remediation/`. Ten defects, each reproduced by
+running the code before being fixed, each now pinned by a regression test that
+fails on the previous commit. **Default output is unchanged** —
+`tests/domain/test_pinned_defaults.py` holds the pre-remediation figures and
+guards them.
+
+| # | Defect | Fix |
+|---|---|---|
+| R1 | `overtime_rate` could not move a single decision; the capacity component was secretly the overtime lever at 7.5x the declared rate | Capacity split into `floor` + `levelling`, both reported. `capacity_rate` documented as the actual dial (0 removes the surcharge). Effective deterrent shown in Settings and `Model_Params`. Utilisation also reported as a slot count, immune to pricing |
+| R2 | A plan compared against itself reported a **$2bn loss**: quota folded into the optimized total, never computed for the baseline | `total_composite_cost` is the DP objective only. Quota is a declared component computed on both sides. Components must sum to the total |
+| R3 | An unreachable advisory sat inside the reported optimum, with BWXT starved all year and no explanation | Advisory labelled as such; `zero_allocation_warnings` names the structural cause |
+| R4 | Converter renamed duplicate account numbers, parser merged them — renamed sites reported as new customers | One `domain/site_codes.py` used by both readers |
+| R5 | Onboarding ranked on `-15,000 x deliveries_before_week_52`, always recommending week 1 | Ranks on `delta_marginal`; `generators_added` surfaced |
+| R6 | Changing a setting did not invalidate a stored plan; comparisons silently mixed generations | `Settings.fingerprint` stamped on results; `StaleResultError`; staleness banner |
+| R7 | `min_batch_produced` exposed, exported, enforced nowhere | Solver enumerates `realisable_good_levels` only |
+| R8 | `row_demand`/`eu_demand` duplicated; `ROW_*` columns contradicted the enforced rule | One EU array; `ROW_*` replaced by four `EU_*` columns |
+| R9 | EU material rule compared production-week Curium against due-week demand | Checked against the production week via the delivery assignment |
+| R10 | Runtime `assert` in a cost path, triplicated cost formula, order-dependent match suggestions, misleading infeasibility message, float schedule marks, list aliasing, duplicate counter, fixed-plan mode ignoring the QC cap | All addressed; see the spec |
+
+**Breaking API changes** (all in-repo callers updated):
+
+1. `solve_plan_integrated` / `solve_with_suppliers` lost the `row_demand`
+   parameter; `solve_with_suppliers` now returns a 4-tuple including the delivery
+   assignment.
+2. `Weekly_Plan` lost `ROW_Demand_Due`, `ROW_Fulfilled`, `ROW_Inventory` and
+   gained `EU_Restricted_Due`, `EU_Shipping_Cap`, `EU_Prebuild_Required`,
+   `EU_Prebuild_Available`.
+3. `summary["total_composite_cost"]` no longer includes the quota penalty — read
+   `total_cost_with_quota` for the previous value.
+4. `onboarding.OBJECTIVES` is `("marginal", "penalty", "overtime")`; `"capacity"`
+   is gone as a ranking objective.
+5. Comparison component labels: `"Total Composite"` is now `"Total"`, and
+   `"Quota Shortfall (advisory)"` is a new row.
+
+A `capacity_baseline` setting was built during this work and then **removed** before
+completion. It offered a second idle-capacity ceiling, produced an identical plan to
+simply lowering `capacity_rate`, and inflated the reported capacity total by $11.7M
+of constant that no plan could influence — which forced a UI warning telling
+planners to disregard the total. A setting whose output needs an instruction to
+ignore it is the wrong setting. The reasoning is recorded in
+`.kiro/specs/correctness-remediation/requirements.md` R1.2 so it is not
+re-proposed.
+
 ---
 
 ## 5. Things a successor should know
 
-**The optimizer is a proven optimum, not a heuristic.** Dynamic programming over
-weekly inventory. Deterministic — same input, same plan, byte for byte. Onboarding's
-re-planning mode is exhaustive below 500 combinations and heuristic above, and says
-which it used.
+**The optimizer is a proven optimum of the objective it is given.** Dynamic
+programming over weekly inventory. Deterministic — same input, same plan, byte for
+byte. Two honest caveats: the DP prunes states that would create avoidable backlog
+before searching, and the quarterly quota is computed *after* the solve, so it is
+not part of what was optimised (it is reported separately — see R2/R3 above).
+Onboarding's re-planning mode is exhaustive below 500 combinations and heuristic
+above, and says which it used.
 
-**Capacity cost is mostly structural.** Demand is ~86% of annual capacity, so idle
-slots are arithmetic, not a planning failure. On the customer's data 98% of the
-capacity cost is unavoidable. Judge the tool on penalty and overtime.
+**Capacity cost is mostly structural — and the rest is the overtime lever.**
+Demand is ~86% of annual capacity, so idle slots are arithmetic, not a planning
+failure; that part is now reported as `total_capacity_floor_cost`. The remainder,
+`total_capacity_levelling_cost`, is exactly `capacity_rate` per unit produced above
+the normal weekly ceiling — so it, not `overtime_rate`, is what decides how much
+overtime the plan runs. Sweeping `overtime_rate` from $0 to $20,000 changes
+nothing; `capacity_rate` alone flips 25 of 26 overtime weeks. See `TOOL_LOGIC.md`
+§7.3. Do **not** repeat the old advice to "judge the tool on penalty and overtime"
+without saying that overtime is governed by the capacity rate.
 
 **Site matching is the load-bearing weak point.** Every per-customer figure depends
 on an input row matching a Master Planner column. Codes are the leading account
 number where present, else `RF-<sha1_8>`. Both the parser and the converter recognise
 a code already written into a header and read it verbatim — without that, annotating
-a workbook changes the very codes it writes.
+a workbook changes the very codes it writes. All of that logic, **including duplicate
+`-2` suffixing**, now lives in `domain/site_codes.py` and is called by both readers;
+they previously disagreed about duplicates, which turned a renamed site into a
+phantom new customer.
 
-**Reference-week anchoring must stay in both readers.** Anchoring one side only
-reported 1,186 fabricated per-customer changes against 60 real ones. `domain/week_anchor.py`
-is the single shared implementation; keep it that way.
+**Anything read from the Master Planner must be read the same way by both readers.**
+Anchoring on one side only reported 1,186 fabricated per-customer changes against 60
+real ones, which is why `domain/week_anchor.py` is shared. Duplicate site codes were
+the identical mistake in a different rule, which is why `domain/site_codes.py` now
+exists. If you add a third rule that both readers need, share it from the start —
+this project has paid for the lesson twice.
 
 **Changed-week attribution to a specific site is a modelling choice.** The solver
 picks weekly totals; a second step assigns anonymous generators to customers. Totals

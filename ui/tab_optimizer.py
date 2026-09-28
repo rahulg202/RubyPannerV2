@@ -23,18 +23,197 @@ from ui.formatting import (
     mark_current_week,
     quota_frame,
     usd,
+    usd_md,
 )
+
+
+def _render_stale_banner(result, settings) -> None:
+    """Say so when the displayed plan predates the current settings.
+
+    Settings changes do not clear a stored result — only uploading a file or
+    restoring defaults does. Without this the tab keeps presenting a plan solved
+    under different cost rates as though it were current.
+    """
+    stamped = getattr(result, "settings_fingerprint", "")
+    if not stamped or stamped == settings.fingerprint:
+        return
+    st.warning(
+        "**Settings have changed since this plan was solved.** The figures below "
+        "still reflect the earlier settings. Run the optimizer again to bring them "
+        "up to date — the Comparison tab will refuse to use a plan from a "
+        "different set of settings."
+    )
 
 
 def _render_metrics(summary: dict) -> None:
     cols = st.columns(5)
-    cols[0].metric("Total cost", usd(summary.get("total_composite_cost")))
+    cols[0].metric(
+        "Optimized cost", usd(summary.get("total_composite_cost")),
+        help="Penalty + overtime + capacity: the objective the solver minimised. "
+             "The supplier quota advisory is reported separately because the "
+             "solver could not act on it.",
+    )
     cols[1].metric("Penalty", usd(summary.get("total_penalty_cost")))
     cols[2].metric("Overtime", usd(summary.get("total_overtime_cost")))
-    cols[3].metric("Capacity", usd(summary.get("total_capacity_cost")))
+    cols[3].metric(
+        "Unused capacity", usd(summary.get("total_capacity_cost")),
+        help="Cost of production slots the plan did not fill. Broken into its two "
+             "parts below — most of it is arithmetic you cannot change.",
+    )
     cols[4].metric("Overtime weeks", summary.get("overtime_weeks", 0))
+
+    # Split the unused-capacity figure. The bulk of it is fixed by demand versus
+    # factory size and no plan can move it; what is left is charged per overtime
+    # generator and is what actually decides overtime versus holding stock. Lumping
+    # the two together is how the overtime lever stayed hidden.
+    if "total_capacity_floor_cost" in summary:
+        surcharge = summary.get("total_capacity_levelling_cost", 0.0)
+        split = st.columns(2)
+        split[0].metric(
+            "…of which unavoidable",
+            usd(summary["total_capacity_floor_cost"]),
+            help="Your customers order less than the factory can make, so some "
+                 "slots sit empty every year no matter how the plan is arranged. "
+                 "This figure is the same for every possible plan. It is not a "
+                 "planning failure and the optimizer cannot reduce it.",
+        )
+        split[1].metric(
+            "…of which overtime surcharge", usd(surcharge),
+            help="Generators made on a 3rd batch do not use up your standing "
+                 "2-batch capacity, so each one leaves a normal slot empty "
+                 "elsewhere in the year — and that empty slot is charged. This is "
+                 "the extra cost of overtime on top of the overtime rate, and it "
+                 "is the only part of unused capacity that the plan can change.",
+        )
+
+    _render_utilisation(summary)
+
+
+def _render_utilisation(summary: dict) -> None:
+    """How full the factory was, in slots rather than money.
+
+    Deliberately independent of every cost rate. "How much capacity did we lose"
+    is a fact about the factory; "what is that worth" is a pricing judgement. Tying
+    the two together meant a planner could not see utilisation without first
+    agreeing a price for it — and meant editing a rate appeared to change how busy
+    the factory had been.
+    """
+    if "total_idle_slots" not in summary:
+        return
+
+    idle = summary["total_idle_slots"]
+    unavoidable = summary.get("unavoidable_idle_slots", 0)
+    forced = summary.get("forced_overtime_units", 0)
+    discretionary = summary.get("discretionary_overtime_units", 0)
+    nominal = summary.get("nominal_slots", 0)
+
+    st.markdown("**Factory utilisation** (slot counts, unaffected by cost settings)")
+    cols = st.columns(3)
+    cols[0].metric(
+        "Idle slot-weeks", f"{idle:,}",
+        help="Standing production slots that went unfilled across the horizon, "
+             "counting a normal week as 30 slots.",
+    )
+
+    # Either demand sits below standing capacity or above it. Never both, so the
+    # middle metric switches rather than showing one of them as a negative — which
+    # is what it used to do, reporting "-20 idle slot-weeks fixed by demand".
+    if forced:
+        cols[1].metric(
+            "Overtime forced by demand", f"{forced:,}",
+            help=f"Demand ({summary.get('produced', nominal + forced):,}) exceeds "
+                 f"standing capacity ({nominal:,} slots), so this many generators "
+                 f"must come from a 3rd batch. No plan can avoid them.",
+        )
+    else:
+        cols[1].metric(
+            "Idle fixed by demand", f"{unavoidable:,}",
+            help="Slots empty purely because customers order less than the factory "
+                 "can make. No plan can reduce this — filling a slot needs an "
+                 "order, not a better schedule.",
+        )
+    cols[2].metric(
+        "Overtime by choice", f"{discretionary:,}",
+        help="Overtime beyond the forced minimum. Each unit leaves one standing "
+             "slot empty elsewhere, so this is the only part of the idle total "
+             "that responds to the plan.",
+    )
+
+    if forced:
+        st.caption(
+            f"**Demand exceeds standing capacity.** You need "
+            f"{nominal + forced:,} generators against {nominal:,} standing slots, "
+            f"so at least {forced:,} must come from overtime whatever the plan. "
+            f"The {discretionary:,} further overtime unit(s) were a choice, and "
+            f"they are what leaves {idle:,} standing slot-week(s) empty elsewhere."
+        )
+    elif discretionary == 0 and idle:
+        st.caption(
+            f"All {idle:,} idle slot-weeks are fixed by demand versus factory size. "
+            f"**No plan can improve on this**, whatever the cost settings say — "
+            f"filling a slot needs an order, not a better schedule."
+        )
+    elif discretionary:
+        st.caption(
+            f"Of {idle:,} idle slot-weeks, {unavoidable:,} are fixed by demand and "
+            f"cannot be improved. Only the {discretionary:,} caused by chosen "
+            f"overtime respond to the plan — and removing them means holding stock "
+            f"earlier instead."
+        )
+
     if "total_quota_penalty_cost" in summary:
-        st.metric("Supplier quota penalty", usd(summary["total_quota_penalty_cost"]))
+        st.metric(
+            "Supplier quota shortfall (advisory)",
+            usd(summary["total_quota_penalty_cost"]),
+            help=summary.get("quota_advisory_note", ""),
+        )
+
+    _render_overtime_explainer(summary)
+
+
+def _render_overtime_explainer(summary: dict) -> None:
+    """Explain the overtime-versus-hold-stock trade in plain terms.
+
+    This is the choice the plan turns on whenever demand is uneven, and until the
+    unused-capacity figure was split it was invisible: the deciding number sat
+    inside a line the guide told planners to ignore as a fixed floor.
+    """
+    if "total_capacity_floor_cost" not in summary:
+        return
+
+    surcharge = summary.get("total_capacity_levelling_cost", 0.0)
+    overtime_weeks = summary.get("overtime_weeks", 0)
+    holding = summary.get("total_penalty_cost", 0.0)
+
+    with st.expander("Why this plan runs the overtime it does"):
+        st.markdown(
+            "When customers in one week need more than the factory comfortably "
+            "makes, the plan has two options:\n\n"
+            "1. **Run a 3rd batch that week** — pay the overtime rate, plus the "
+            "cost of a normal slot left empty somewhere else in the year.\n"
+            "2. **Make the generators earlier and hold them** — pay the holding "
+            "rate for every week they wait.\n\n"
+            "The tool takes whichever is cheaper, week by week."
+        )
+        if overtime_weeks == 0:
+            st.success(
+                f"**This plan chose to hold stock instead of running any "
+                f"overtime.** It is paying {usd_md(holding)} in holding cost to keep "
+                f"every week inside normal capacity. Overtime surcharge is "
+                f"{usd_md(surcharge)} because no week runs a 3rd batch."
+            )
+        else:
+            st.info(
+                f"**This plan runs {overtime_weeks} overtime week(s).** In those "
+                f"weeks, building early would have cost more than the overtime "
+                f"did. The {usd_md(surcharge)} surcharge is the empty normal slots "
+                f"those overtime generators left behind elsewhere in the year."
+            )
+        st.caption(
+            "Which way this tips is controlled by the unused-slot cost in "
+            "**Settings**, not by the overtime rate — see the note beside those "
+            "two fields."
+        )
 
 
 def _render_plan(result, settings) -> None:
@@ -67,9 +246,15 @@ def _render_quota(result) -> None:
         if penalised:
             st.warning(
                 "One or more fully-covered supplier quarters fall below the "
-                "minimum order quota. That shortfall penalty is included in the "
-                "total cost."
+                "minimum order quota. **This is an advisory.** Supplier allocation "
+                "runs after the production plan is solved, so the optimizer could "
+                "not trade this shortfall against the other costs — it is reported "
+                "separately from the optimized total rather than folded into it."
             )
+
+        # Structural causes the planner can act on where the optimizer cannot.
+        for structural in result.summary.get("quota_structural_warnings", []):
+            st.warning(structural)
 
         note = result.summary.get("partial_quarter_note")
         if note:
@@ -265,6 +450,9 @@ def render(optimizer_service, settings_or_error) -> None:
             calibration_offset_days=settings.calibration_offset_days,
             master_planner_bytes=st.session_state.get(S.MP_BYTES),
             master_planner_sheet=st.session_state.get(S.MP_SHEET) or "Schedule",
+            # Stamped onto the result so a later comparison can tell whether the
+            # settings still match the ones this plan was solved under.
+            settings_fingerprint=settings.fingerprint,
         )
         with st.spinner("Optimizing 52 weeks of production..."):
             try:
@@ -286,6 +474,7 @@ def render(optimizer_service, settings_or_error) -> None:
 
     st.divider()
     st.markdown("### Results")
+    _render_stale_banner(result, settings)
     for warning in result.warnings:
         st.warning(warning)
 

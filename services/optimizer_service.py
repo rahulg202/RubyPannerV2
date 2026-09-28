@@ -109,26 +109,29 @@ class OptimizerService:
         eu_demand = build_weekly_row_demand(active_df, request.params)
 
         # --- Solve (supplier-constrained, with row_cap enforcement) ---
+        # Demand events go in so the solve can assign deliveries and check the
+        # EU-restricted material rule against the week each generator is *made*.
+        # The assignment comes back rather than being recomputed here.
+        events = build_demand_events(active_df, request.params)
         try:
-            plan_df, summary, quota_status = solve_with_suppliers(
+            plan_df, summary, quota_status, assignments = solve_with_suppliers(
                 demand,
                 list(request.shutdown_weeks),
                 list(request.partial_shutdown_weeks),
                 eu_demand,
                 request.params.row_cap,
                 request.params,
-                eu_demand,
                 request.supplier_params,
                 request.reference_week_date,
+                events,
             )
         except RuntimeError as exc:
             # The DP solver signals infeasibility with RuntimeError; translate it.
             raise InfeasiblePlanError(str(exc)) from exc
 
-        # --- Disaggregate deliveries to customers ---
-        events = build_demand_events(active_df, request.params)
-        y_plan = [0] + plan_df["Good_Production"].tolist()
-        assignments = assign_deliveries(y_plan, events, request.params)
+        # Structural quota problems the solver could not have acted on, since
+        # supplier allocation happens after the solve.
+        warnings.extend(summary.get("quota_structural_warnings", []))
 
         # --- Compare against the manual plan (the change that matters) ---
         # Without a manual plan there is nothing to compare against, so the
@@ -208,4 +211,5 @@ class OptimizerService:
             warnings=warnings,
             match_report=match_report,
             match_summary=match_summary,
+            settings_fingerprint=request.settings_fingerprint,
         )

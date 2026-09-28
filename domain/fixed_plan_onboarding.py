@@ -69,14 +69,30 @@ class FixedPlanResult:
     overtime_added: int = 0
     shifted: int = 0
     infeasible: int = 0
-    # Distinct weeks newly pushed past the normal ceiling (what is charged).
-    overtime_weeks_added: int = 0
+    # Generators that would ship beyond the QC weekly cap for EU-restricted sites.
+    cap_breaches: int = 0
     placements: List[Placement] = field(default_factory=list)
     reason: str = ""
 
     @property
     def generators(self) -> int:
         return len(self.placements)
+
+    @property
+    def overtime_weeks_added(self) -> int:
+        """Distinct weeks newly pushed past the normal ceiling (what is charged).
+
+        Derived rather than counted separately. The overtime charge applies once
+        per newly-overtime week, so a second generator landing in an
+        already-charged week comes back as ``OUTCOME_ABSORBED`` — which made the
+        old hand-maintained counter necessarily equal to ``overtime_added`` and
+        therefore a second name for the same number.
+        """
+        return len({
+            placement.produced_week
+            for placement in self.placements
+            if placement.outcome == OUTCOME_OVERTIME
+        })
 
     @property
     def placed_without_cost(self) -> int:
@@ -125,6 +141,7 @@ def evaluate_against_fixed_plan(
     selected_weeks: Dict[str, int],
     params: IntegratedParams,
     max_shift_weeks: int = 4,
+    eu_due: Sequence[int] | None = None,
 ) -> FixedPlanResult:
     """Cost of adding these customers to a plan whose weekly output is fixed.
 
@@ -143,6 +160,13 @@ def evaluate_against_fixed_plan(
     max_shift_weeks : int
         How far earlier a generator may be built and held before the option is
         abandoned. Beyond a few weeks the holding cost exceeds overtime anyway.
+    eu_due : Sequence[int] | None
+        1-indexed EU-restricted units already due per week in the existing plan.
+        Supply it to check new EU-restricted customers against the QC shipping cap
+        (``params.row_cap``). Without it the cap is not checked, and a new
+        Denmark/UK/Netherlands/Sweden site can be slotted into a week already at
+        the cap with nothing said — the re-planning mode enforces that cap, so
+        leaving it unchecked here made the two modes disagree about feasibility.
 
     Returns
     -------
@@ -193,11 +217,36 @@ def evaluate_against_fixed_plan(
             required.append((week, customer.site_id))
     required.sort()
 
+    # QC shipping cap tracking. Counts EU-restricted units already due each week
+    # in the existing plan, then adds the new customers' as they are placed, so
+    # two new restricted sites cannot both claim the last slot under the cap.
+    eu_shipping = [0] * (T + 2)
+    if eu_due is not None:
+        for week in range(1, T + 1):
+            if week < len(eu_due):
+                eu_shipping[week] = int(eu_due[week])
+    eu_customers = {
+        customer.site_id for customer in customers if customer.is_eu_restricted
+    }
+
     for due_week, site_id in required:
         placement = _place_one(
             due_week, site_id, planned, normal_cap, overtime_cap,
             already_overtime, charged_overtime, params, max_shift_weeks, T,
         )
+
+        # The cap is about the week the generator *ships*, which is its due week,
+        # regardless of which week it was built in.
+        if eu_due is not None and site_id in eu_customers:
+            eu_shipping[due_week] += 1
+            if eu_shipping[due_week] > params.row_cap:
+                result.cap_breaches += 1
+                placement.detail += (
+                    f" Week {due_week} would ship {eu_shipping[due_week]} "
+                    f"EU-restricted generators against a QC cap of "
+                    f"{params.row_cap}."
+                )
+
         result.placements.append(placement)
 
         if placement.outcome == OUTCOME_FITS:
@@ -207,7 +256,6 @@ def evaluate_against_fixed_plan(
         elif placement.outcome == OUTCOME_OVERTIME:
             result.overtime_cost += placement.cost
             result.overtime_added += 1
-            result.overtime_weeks_added += 1
         elif placement.outcome == OUTCOME_SHIFTED:
             result.holding_cost += placement.cost
             result.shifted += 1
@@ -215,17 +263,27 @@ def evaluate_against_fixed_plan(
             result.infeasible += 1
 
     result.added_cost = result.overtime_cost + result.holding_cost
-    result.feasible = result.infeasible == 0
-    if not result.feasible:
+    # A cap breach is a hard constraint the re-planning mode would refuse, so this
+    # mode must not report the option as workable either.
+    result.feasible = result.infeasible == 0 and result.cap_breaches == 0
+    reasons: List[str] = []
+    if result.infeasible:
         weeks = sorted({
             p.due_week for p in result.placements
             if p.outcome == OUTCOME_INFEASIBLE
         })
-        result.reason = (
+        reasons.append(
             f"{result.infeasible} generator(s) could not be placed in week(s) "
             f"{', '.join(str(w) for w in weeks)}: the plan is already at the "
             f"overtime ceiling there and no earlier week has a spare slot."
         )
+    if result.cap_breaches:
+        reasons.append(
+            f"{result.cap_breaches} delivery/deliveries would exceed the QC "
+            f"shipping cap of {params.row_cap} EU-restricted generator(s) a week. "
+            f"Those units can be built early but still cannot ship together."
+        )
+    result.reason = " ".join(reasons)
     return result
 
 

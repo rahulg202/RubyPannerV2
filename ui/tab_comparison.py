@@ -9,8 +9,9 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from domain.delivery_assignment import build_demand_events
 from domain.demand import build_weekly_demand, build_weekly_row_demand
-from domain.errors import RubyFillError, ValidationError
+from domain.errors import RubyFillError, StaleResultError, ValidationError
 from domain.site_matching import STATUS_MATCHED, match_report_frame
 from services.dtos import ComparisonRequest
 from ui import sidebar
@@ -184,9 +185,20 @@ def _render_result(result) -> None:
             st.warning(warning)
 
     total = next(
-        (c for c in result.components if c["Component"] == "Total Composite"), None
+        (c for c in result.components if c["Component"] == "Total"), None
     )
     penalty = next((c for c in result.components if c["Component"] == "Penalty"), None)
+
+    # The components must sum to the total on both sides. A False here means one
+    # side is carrying a cost the other never computed, which is exactly the
+    # defect that once reported a $2bn loss for a plan compared against itself.
+    if result.components and not result.components[0].get("Reconciles", True):
+        st.error(
+            "**These figures do not add up and must not be used.** The cost "
+            "components do not sum to the total on at least one side, which means "
+            "the two plans are being costed with different rules. Please report "
+            "this."
+        )
 
     if not result.baseline_totals_reconcile:
         _render_unreconciled_baseline(result)
@@ -214,7 +226,10 @@ def _render_result(result) -> None:
             "Penalty and overtime are where the optimizer earns its keep. The "
             "capacity component is largely a fixed floor set by demand versus "
             "factory capacity, so it moves little between plans and can even "
-            "worsen slightly."
+            "worsen slightly. The quota row is an advisory: supplier allocation "
+            "happens after the plan is solved, so neither plan was optimized "
+            "against it — but it is now computed the same way on both sides, so "
+            "the totals are comparable."
         )
 
     dates = week_date_map(result.week_dates)
@@ -366,15 +381,37 @@ def render(comparison_service, settings_or_error) -> None:
             optimized_plan_df=opt_result.plan_df,
             demand=tuple(demand),
             params=settings.params,
+            # Supplier params make the quota advisory appear on the manual-plan
+            # side too. Without them the optimized side carries a shortfall this
+            # side never computes, and the gap reads as the optimizer being worse.
+            supplier_params=settings.supplier_params,
             shutdown_weeks=settings.shutdown_weeks,
             partial_shutdown_weeks=settings.partial_shutdown_weeks,
             reference_week_date=settings.reference_week_date,
             active_sites=active_sites,
             eu_demand=tuple(eu_demand),
+            # Same events both sides, so EU-restricted volume is attributed to
+            # production weeks identically.
+            demand_events=tuple(build_demand_events(opt_result.active_df,
+                                                    settings.params)),
+            settings_fingerprint=settings.fingerprint,
+            optimized_settings_fingerprint=getattr(
+                opt_result, "settings_fingerprint", ""
+            ),
         )
         with st.spinner("Reading the Master Planner and evaluating the manual plan..."):
             try:
                 st.session_state[S.CMP_RESULT] = comparison_service.run(request)
+            except StaleResultError as exc:
+                st.error(str(exc))
+                st.info(
+                    "The plan currently loaded was solved under different "
+                    "settings. Comparing it against a manual plan costed with "
+                    "today's settings would attribute the difference to the "
+                    "optimizer rather than to the settings change. Re-run the "
+                    "**Cost Optimizer** tab, then come back."
+                )
+                return
             except RubyFillError as exc:
                 st.error(str(exc))
                 return

@@ -32,11 +32,25 @@ from domain.supplier_solve import solve_with_suppliers
 
 EXHAUSTIVE_THRESHOLD = 500
 TOP_N = 5
-OBJECTIVES = ("penalty", "overtime", "capacity")
+
+# Ranking objectives.
+#
+# ``"capacity"`` used to be offered here and was meaningless. The capacity
+# component is dominated by a floor that is constant for a given demand total, so
+# ranking on its delta ranked on ``-capacity_rate * generators_added`` — i.e. on
+# how many of the new customer's deliveries happen to fall inside the 52-week
+# window. That recommended week 1 for every customer, because week 1 is furthest
+# from the horizon boundary, and it did so even when penalty and overtime were
+# identical across the whole window.
+#
+# ``"marginal"`` is the default: the cost that actually varies with the decision.
+# ``domain.fixed_plan_onboarding`` already excluded idle capacity for exactly this
+# reason; the two modes now agree.
+OBJECTIVES = ("marginal", "penalty", "overtime")
 _OBJECTIVE_KEY = {
+    "marginal": "delta_marginal",
     "penalty": "delta_penalty",
     "overtime": "delta_overtime",
-    "capacity": "delta_capacity",
 }
 
 ProgressCallback = Callable[[float, str], None]
@@ -70,7 +84,13 @@ class NewCustomer:
 
 @dataclass
 class CombinationResult:
-    """One evaluated assignment of start weeks to new customers."""
+    """One evaluated assignment of start weeks to new customers.
+
+    ``delta_marginal`` is the figure to rank on. ``delta_composite`` and
+    ``delta_capacity`` are retained and displayed, but both are dominated by the
+    capacity floor, which moves only with ``generators_added`` — a horizon-edge
+    artefact rather than a planning outcome. See :data:`OBJECTIVES`.
+    """
 
     selected_weeks: Dict[str, int]
     feasible: bool = True
@@ -78,17 +98,35 @@ class CombinationResult:
     delta_overtime: float = 0.0
     delta_capacity: float = 0.0
     delta_composite: float = 0.0
+    delta_quota: float = 0.0
+    # Weighted penalty + overtime + quota advisory: the cost that genuinely
+    # responds to the start-week choice.
+    delta_marginal: float = 0.0
     total_penalty: float = 0.0
     total_overtime: float = 0.0
     total_capacity: float = 0.0
     total_composite: float = 0.0
     overtime_weeks: int = 0
+    # Deliveries this start week places inside the horizon. Later start weeks fit
+    # fewer, which is why raw totals favour earlier weeks for arithmetic reasons.
+    generators_added: int = 0
     reason: str = ""
     plan_df: pd.DataFrame | None = None
 
     def key(self) -> Tuple[int, ...]:
         """Stable identity for de-duplication (weeks in sorted site order)."""
         return tuple(self.selected_weeks[k] for k in sorted(self.selected_weeks))
+
+    @property
+    def marginal_per_generator(self) -> float | None:
+        """Marginal cost spread over the deliveries actually served.
+
+        Lets a planner compare options that differ in how many deliveries land
+        inside the window, instead of being misled by the raw total.
+        """
+        if self.generators_added <= 0:
+            return None
+        return self.delta_marginal / self.generators_added
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +215,36 @@ def inject_customer_demand(
 # Search-space estimation
 # ---------------------------------------------------------------------------
 
+def generators_added(
+    customers: Sequence[NewCustomer],
+    selected_weeks: Dict[str, int],
+    params: IntegratedParams,
+) -> int:
+    """Deliveries these start weeks place inside the horizon.
+
+    Reported because it is the sole driver of ``delta_capacity`` and therefore of
+    ``delta_composite``: every extra delivery cancels one ``capacity_rate``
+    idle-slot charge. A start week four weeks earlier can fit one more delivery
+    inside 52 weeks and so appears ~$15,000 "cheaper" for no operational reason.
+    Surfacing the count makes that visible instead of letting it masquerade as a
+    saving.
+    """
+    total = 0
+    horizon = params.horizon_weeks
+    for customer in customers:
+        start = selected_weeks.get(customer.site_id)
+        if start is None:
+            continue
+        if customer.interval_weeks <= 0:
+            total += 1 if 1 <= start <= horizon else 0
+            continue
+        week = start
+        while 1 <= week <= horizon:
+            total += 1
+            week += customer.interval_weeks
+    return total
+
+
 def count_combinations(customers: Sequence[NewCustomer]) -> int:
     """Product of the window widths — the exhaustive search space size."""
     total = 1
@@ -211,9 +279,9 @@ def run_baseline(
     """Solve with existing sites only — the shared comparison baseline."""
     demand = build_weekly_demand(active_df, params)
     eu_demand = build_weekly_row_demand(active_df, params)
-    _plan, summary, _quota = solve_with_suppliers(
+    _plan, summary, _quota, _assignments = solve_with_suppliers(
         demand, list(shutdown_weeks), list(partial_shutdown_weeks),
-        eu_demand, params.row_cap, params, eu_demand, supplier_params,
+        eu_demand, params.row_cap, params, supplier_params,
         reference_week_date,
     )
     return summary
@@ -239,32 +307,51 @@ def evaluate_combination(
     eu_demand = inject_customer_demand(
         base_eu, customers, selected_weeks, params, eu_only=True
     )
+    added = generators_added(customers, selected_weeks, params)
 
     try:
-        plan_df, summary, _quota = solve_with_suppliers(
+        plan_df, summary, _quota, _assignments = solve_with_suppliers(
             demand, list(shutdown_weeks), list(partial_shutdown_weeks),
-            eu_demand, params.row_cap, params, eu_demand, supplier_params,
+            eu_demand, params.row_cap, params, supplier_params,
             reference_week_date,
         )
     except (RuntimeError, InfeasibleAllocationError) as exc:
         return CombinationResult(
             selected_weeks=dict(selected_weeks),
             feasible=False,
+            generators_added=added,
             reason=str(exc),
         )
+
+    delta_penalty = summary["total_penalty_cost"] - base_summary["total_penalty_cost"]
+    delta_overtime = summary["total_overtime_cost"] - base_summary["total_overtime_cost"]
+    delta_quota = (
+        summary.get("total_quota_penalty_cost", 0.0)
+        - base_summary.get("total_quota_penalty_cost", 0.0)
+    )
+    # Weighted the same way the objective weights them, so turning a weight to
+    # zero removes that component from the ranking too.
+    delta_marginal = (
+        params.w_penalty * delta_penalty
+        + params.w_overtime * delta_overtime
+        + supplier_params.w_quota * delta_quota
+    )
 
     return CombinationResult(
         selected_weeks=dict(selected_weeks),
         feasible=True,
-        delta_penalty=summary["total_penalty_cost"] - base_summary["total_penalty_cost"],
-        delta_overtime=summary["total_overtime_cost"] - base_summary["total_overtime_cost"],
+        delta_penalty=delta_penalty,
+        delta_overtime=delta_overtime,
         delta_capacity=summary["total_capacity_cost"] - base_summary["total_capacity_cost"],
         delta_composite=summary["total_composite_cost"] - base_summary["total_composite_cost"],
+        delta_quota=delta_quota,
+        delta_marginal=delta_marginal,
         total_penalty=summary["total_penalty_cost"],
         total_overtime=summary["total_overtime_cost"],
         total_capacity=summary["total_capacity_cost"],
         total_composite=summary["total_composite_cost"],
         overtime_weeks=summary["overtime_weeks"],
+        generators_added=added,
         plan_df=plan_df if keep_plan else None,
     )
 
@@ -279,8 +366,13 @@ def rank_top_n(
 ) -> Dict[str, List[CombinationResult]]:
     """Rank feasible results per objective, ascending, with deterministic ties.
 
-    Ties on the primary delta break on ``delta_composite``, then on the selected
-    weeks tuple, so repeated runs produce identical ordering.
+    Ties break on ``delta_marginal``, then on **more** deliveries served, then on
+    the selected-weeks tuple. Serving more deliveries as a tie-break is a stated
+    choice rather than an emergent one: where two options cost the same, the one
+    that fits more of the customer's year inside the plan is the more useful
+    answer. It is a tie-break only — it can never outrank a genuine cost
+    difference, which is exactly what the old ``delta_composite`` ordering let it
+    do.
     """
     feasible = [r for r in results if r.feasible]
     rankings: Dict[str, List[CombinationResult]] = {}
@@ -289,7 +381,7 @@ def rank_top_n(
         ordered = sorted(
             feasible,
             key=lambda r, f=field_name: (
-                getattr(r, f), r.delta_composite, r.key()
+                getattr(r, f), r.delta_marginal, -r.generators_added, r.key()
             ),
         )
         rankings[obj] = ordered[:top_n]
@@ -356,7 +448,10 @@ def _coordinate_descent(
                 candidate = evaluate(trial)
                 if not candidate.feasible:
                     continue
-                if not best.feasible or candidate.delta_composite < best.delta_composite:
+                # Descend on the cost that responds to the decision. Descending on
+                # delta_composite walked toward whichever week fitted the most
+                # deliveries inside the horizon, regardless of what it cost.
+                if not best.feasible or candidate.delta_marginal < best.delta_marginal:
                     best = candidate
                     current = trial
                     improved = True
@@ -388,9 +483,11 @@ def _heuristic_search(
                 reference_week_date,
             )
             if r.feasible:
-                scored.append((r.delta_composite, week))
+                scored.append((r.delta_marginal, -r.generators_added, week))
         scored.sort()
-        per_customer_best[c.site_id] = [w for _, w in scored[:3]] or list(c.window[:1])
+        per_customer_best[c.site_id] = [
+            w for _cost, _added, w in scored[:3]
+        ] or list(c.window[:1])
         if progress:
             progress(
                 0.4 * ci / max(1, len(customers)),

@@ -28,12 +28,19 @@ from domain.params import IntegratedParams
 
 @dataclass(frozen=True)
 class DemandEvent:
-    """One customer's single generator requirement in a specific week."""
+    """One customer's single generator requirement in a specific week.
+
+    ``eu_restricted`` marks a site that may only receive Curium material. It is
+    carried here because the material rule applies in the week the generator is
+    *made*, and this is the only place that week is known — the solver picks
+    weekly totals and never tracks whose unit is whose.
+    """
 
     scheduled_week: int
     site_id: str
     site_name: str = ""
     country: str = ""
+    eu_restricted: bool = False
 
 
 @dataclass
@@ -55,6 +62,9 @@ class DeliveryRecord:
     due_week: int                       # when the customer is due, from the input file
     planned_week: int                   # week the optimizer produces this generator
     due_week_shift: int                 # planned - due (context only)
+    # Carried through from the demand event so the supplier material rule can be
+    # checked against the production week. See ``eu_restricted_production``.
+    eu_restricted: bool = False
     manual_week: int | None = None      # week the manual plan intended to produce
     week_shift: int | None = None       # planned - manual  (the headline change)
     is_early: bool = False              # relative to the manual plan
@@ -95,10 +105,13 @@ def build_demand_events(
     """
     events: List[DemandEvent] = []
     has_name = "site_name" in active_df.columns
+    has_eu = "is_row" in active_df.columns
     for _, row in active_df.iterrows():
         site_id = str(row["site_id"])
         name = str(row["site_name"]) if has_name else ""
         country = str(row.get("country", ""))
+        # ``is_row`` is the cleaned EU-restricted flag from domain.demand.
+        eu_restricted = bool(row["is_row"]) if has_eu else False
         week = int(row["next_demand_week"])
         interval = int(row["interval_weeks"])
         if interval < 0:
@@ -106,13 +119,42 @@ def build_demand_events(
         if interval == 0:
             # One-time delivery
             if 1 <= week <= params.horizon_weeks:
-                events.append(DemandEvent(week, site_id, name, country))
+                events.append(
+                    DemandEvent(week, site_id, name, country, eu_restricted)
+                )
         else:
             while week <= params.horizon_weeks:
-                events.append(DemandEvent(week, site_id, name, country))
+                events.append(
+                    DemandEvent(week, site_id, name, country, eu_restricted)
+                )
                 week += interval
     events.sort(key=lambda e: (e.scheduled_week, e.site_id))
     return events
+
+
+def eu_restricted_production(
+    records: Sequence["DeliveryRecord"],
+    horizon_weeks: int,
+) -> List[int]:
+    """1-indexed count of EU-restricted units by the week they are *produced*.
+
+    The material rule is about where a generator's raw material came from, so it
+    binds in the week the generator is made — not the week it ships. Those differ
+    whenever the QC shipping cap forces units to be built early, which is exactly
+    the situation the cap exists to create. Checking Curium's allocation in week
+    ``t`` against EU demand *due* in week ``t`` therefore compared two different
+    populations of generators.
+
+    Reads the flag off each record rather than zipping records against events, so
+    there is no positional-alignment assumption to break.
+    """
+    production = [0] * (horizon_weeks + 1)
+    for record in records:
+        if not record.eu_restricted:
+            continue
+        if 1 <= record.planned_week <= horizon_weeks:
+            production[record.planned_week] += 1
+    return production
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +237,7 @@ def assign_deliveries(
                 due_week=sw,
                 planned_week=chosen,
                 due_week_shift=chosen - sw,
+                eu_restricted=event.eu_restricted,
             )
         )
 

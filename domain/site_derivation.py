@@ -26,6 +26,12 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from domain.demand import ROW_COUNTRIES
+from domain.site_codes import (
+    GENERATED_PREFIX,
+    LEADING_ACCOUNT,
+    LEADING_GENERATED,
+    CodeDeduplicator,
+)
 
 # Countries the optimizer treats as ROW / EU-restricted (see domain.demand).
 # Values are emitted lowercase to match ``ROW_COUNTRIES`` there.
@@ -58,15 +64,16 @@ _COUNTRY_PATTERNS: tuple[tuple[str, str], ...] = (
 # An interval declared in the header, e.g. "(7)" or "(7 weeks)".
 _HEADER_INTERVAL = re.compile(r"\(\s*(\d{1,2})\s*(?:weeks?|wks?)?\s*\)", re.IGNORECASE)
 
-# Leading account number, e.g. "00449 ..." or "00631/0105MAK ...".
-_LEADING_ACCOUNT = re.compile(r"^\s*(\d+)")
-
-# A generated code already written into the header, e.g. "RF-4e40dfd2  Apex ...".
-# Recognised so that annotating the Master Planner makes the code *stable*: once
-# it is in the header it must be read literally, never re-derived from the header
-# text. Without this the annotation would change the very code it wrote.
-GENERATED_CODE_PREFIX = "RF-"
-_LEADING_GENERATED = re.compile(r"^\s*(RF-[0-9a-fA-F]{6,})")
+# Code extraction and duplicate suffixing live in domain.site_codes, shared with
+# io_adapters.master_planner_parser. Re-exported here under the existing names so
+# callers and tests keep working.
+#
+# Sharing is the point: the parser and this module must assign the same code to
+# the same column, or a site the converter renames becomes a site the comparison
+# cannot find. See domain/site_codes.py for what that cost.
+_LEADING_ACCOUNT = LEADING_ACCOUNT
+_LEADING_GENERATED = LEADING_GENERATED
+GENERATED_CODE_PREFIX = GENERATED_PREFIX
 
 # Placeholder headers the planning team uses for not-yet-named columns.
 _PLACEHOLDER = re.compile(r"^[\s?\-_.]*$")
@@ -171,6 +178,9 @@ def split_account_and_name(header: str) -> tuple[str | None, str]:
     A previously-written generated code takes precedence, so
     ``"RF-4e40dfd2  Apex Cardiology, TN (7)"`` yields
     ``("RF-4e40dfd2", "Apex Cardiology, TN (7)")`` rather than being hashed again.
+
+    Code recognition comes from :mod:`domain.site_codes`, shared with the Master
+    Planner parser.
     """
     text = str(header).strip()
 
@@ -321,26 +331,25 @@ def derive_site(
 def deduplicate_codes(sites: list[DerivedSite]) -> list[str]:
     """Suffix repeated site codes so every row has a unique key.
 
-    The Master Planner occasionally carries the same account number on two
-    columns (a retired column kept alongside its replacement). The optimizer
-    drops duplicate Site_IDs, so the first occurrence keeps the bare code and
-    later ones become ``00460-2``, ``00460-3``. Returns the warnings raised.
+    A thin wrapper over :class:`domain.site_codes.CodeDeduplicator`, which is the
+    single implementation of the suffixing rule. ``io_adapters.master_planner_parser``
+    uses the same class, so the input file this module generates and the manual
+    plan that module reads agree on every code — including the ``-2`` suffixes.
+
+    They did not agree before: this function renamed the second ``00460`` column
+    while the parser merged both columns' marks into one ``00460`` entry, so the
+    renamed site matched nothing and was reported as a brand-new customer.
     """
-    seen: dict[str, int] = {}
+    dedup = CodeDeduplicator()
     warnings: list[str] = []
     for site in sites:
         base = site.site_code
-        count = seen.get(base, 0) + 1
-        seen[base] = count
-        if count > 1:
-            site.site_code = f"{base}-{count}"
-            note = (
-                f"Master Planner has more than one column with code '{base}'. "
-                f"This one was renamed '{site.site_code}' to keep codes unique — "
-                f"please correct the header."
-            )
+        code, renamed = dedup.assign(base)
+        if renamed:
+            site.site_code = code
+            note = CodeDeduplicator.rename_note(base, code)
             site.notes.append(note)
-            warnings.append(f"{site.site_code}: {note}")
+            warnings.append(f"{code}: {note}")
     return warnings
 
 

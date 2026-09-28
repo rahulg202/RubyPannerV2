@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from typing import List, Tuple
 
 import pandas as pd
@@ -234,12 +235,76 @@ def build_weekly_row_demand(
 
 
 
+@lru_cache(maxsize=256)
+def _realisable_levels(
+    min_good: int, max_good: int, max_batches: int, cap_max: int
+) -> tuple[int, ...]:
+    """Cached level set, keyed on scalars so the cache key is hashable."""
+    levels = {0}
+    for batches in range(1, max_batches + 1):
+        low = batches * min_good
+        high = min(batches * max_good, cap_max)
+        if low > cap_max:
+            break
+        levels.update(range(low, high + 1))
+    return tuple(sorted(level for level in levels if level <= cap_max))
+
+
+def realisable_good_levels(
+    params: IntegratedParams, cap_max: int
+) -> List[int]:
+    """Good-unit totals a week can physically produce, up to ``cap_max``.
+
+    A week runs some whole number of batches, and each batch yields between
+    ``min_good_per_batch`` and ``max_good_per_batch`` good units. So ``y`` is
+    realisable when ``y == 0``, or when some batch count ``k`` in
+    ``1..overtime_max_batches`` satisfies::
+
+        k * min_good_per_batch  <=  y  <=  k * max_good_per_batch
+
+    With the default ``min_batch_produced = 2`` a batch can yield a single good
+    unit, so every integer in ``0..cap_max`` is realisable and this returns the
+    same range the solver used to enumerate blindly. Raising
+    ``min_batch_produced`` is what makes the set sparse — and that setting was
+    previously ignored entirely, so the solver would happily plan a one-unit batch
+    under a fifteen-unit minimum while the exported parameter sheet claimed
+    otherwise.
+
+    Note the windows overlap once ``max_good`` exceeds ``2 * min_good``: with a
+    7-unit minimum, 14 is reachable as one batch of 14 or two of 7. Overlap is
+    fine — the set is what matters, not which batch count produced it.
+
+    Parameters
+    ----------
+    params : IntegratedParams
+        Supplies the batch bounds and the overtime batch ceiling.
+    cap_max : int
+        The week's good-unit ceiling (0 for shutdown, one batch for partial,
+        ``overtime_max_good_week`` otherwise).
+
+    Returns
+    -------
+    List[int]
+        Ascending, always starting with 0.
+    """
+    if cap_max <= 0:
+        return [0]
+    return list(
+        _realisable_levels(
+            params.min_good_per_batch,
+            params.max_good_per_batch,
+            params.overtime_max_batches,
+            int(cap_max),
+        )
+    )
+
+
 def batches_needed(good_units: int, params: IntegratedParams) -> int:
     """
-    Return the number of batches required to produce ``good_units`` good units.
+    Return the fewest batches that can produce exactly ``good_units`` good units.
 
-    Each batch yields 1..15 good units (batch size 2..16 minus 1 test discard).
-    0 good units → 0 batches.
+    Each batch yields between ``min_good_per_batch`` and ``max_good_per_batch``
+    good units. 0 good units → 0 batches.
 
     Parameters
     ----------
@@ -251,18 +316,30 @@ def batches_needed(good_units: int, params: IntegratedParams) -> int:
     Returns
     -------
     int
-        Number of batches (0, 1, 2, or 3).
+        Number of batches, between 1 and ``overtime_max_batches``.
 
     Raises
     ------
     ValueError
-        If good_units is negative.
+        If ``good_units`` is negative, or no batch count can produce it. The
+        latter is reachable only with a raised ``min_batch_produced``: 7 good
+        units cannot come from batches that each yield at least 15.
     """
     if good_units < 0:
         raise ValueError(f"good_units must be >= 0, got {good_units}.")
     if good_units == 0:
         return 0
-    return math.ceil(good_units / params.max_good_per_batch)
+
+    minimum = math.ceil(good_units / params.max_good_per_batch)
+    for batches in range(minimum, params.overtime_max_batches + 1):
+        if batches * params.min_good_per_batch <= good_units:
+            return batches
+
+    raise ValueError(
+        f"{good_units} good units cannot be produced: batches yield "
+        f"{params.min_good_per_batch}..{params.max_good_per_batch} good units "
+        f"each and at most {params.overtime_max_batches} run per week."
+    )
 
 
 
@@ -272,9 +349,16 @@ def split_good_into_batches(
     """
     Split ``good_units`` into individual batch sizes (good units per batch).
 
-    Each batch yields 1..15 good units. Earlier batches are filled to the
-    maximum (15) first; the last batch takes the remainder.
-    Returns a list of length ``batches_needed(good_units, params)``.
+    Every batch is given its minimum yield first, then the remainder is
+    front-loaded up to the per-batch maximum. Earlier batches therefore run
+    fullest, which is what the plan sheet shows.
+
+    Seeding the minimum matters once ``min_batch_produced`` is raised above its
+    default. Filling greedily from the front would split 16 good units into
+    ``[15, 1]``, and a 1-unit batch is impossible when every batch must yield at
+    least 7. Seeding gives ``[9, 7]``. At the default minimum of one good unit the
+    seed is all ones and the result is identical to plain front-loading, so the
+    documented examples below still hold.
 
     Parameters
     ----------
@@ -293,16 +377,25 @@ def split_good_into_batches(
     Raises
     ------
     ValueError
-        If good_units is negative (see :func:`batches_needed`).
+        If good_units is negative, or no batch count can produce it
+        (see :func:`batches_needed`).
     """
     n = batches_needed(good_units, params)
     if n == 0:
         return []
-    result = []
-    rem = good_units
-    for _ in range(n):
-        alloc = min(rem, params.max_good_per_batch)
-        result.append(alloc)
-        rem -= alloc
+
+    minimum = params.min_good_per_batch
+    maximum = params.max_good_per_batch
+    result = [minimum] * n
+    remainder = good_units - minimum * n
+
+    for index in range(n):
+        if remainder <= 0:
+            break
+        room = maximum - result[index]
+        added = min(room, remainder)
+        result[index] += added
+        remainder -= added
+
     return result
 
