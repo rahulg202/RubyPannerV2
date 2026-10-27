@@ -182,18 +182,20 @@ def rankings_frame(
     for rank, opt in enumerate(options, start=1):
         row = {"Rank": rank}
         for sid in site_ids:
-            row[f"{sid} week"] = week_label(opt.selected_weeks.get(sid), dates)
+            row[f"Week for {sid}"] = week_label(opt.selected_weeks.get(sid), dates)
         row.update({
             # The ranked figure comes first: penalty + overtime, the cost that
-            # actually responds to the start-week choice.
-            "Δ Marginal": usd_signed(getattr(opt, "delta_marginal", 0.0)),
+            # actually responds to the start-week choice. Named to match the
+            # fixed-plan mode's column for the same quantity, so a planner reads
+            # one vocabulary across both modes.
+            "Added cost": usd_signed(getattr(opt, "delta_marginal", 0.0)),
             "Δ Penalty": usd_signed(opt.delta_penalty),
             "Δ Overtime": usd_signed(opt.delta_overtime),
             # Deliveries this start week fits inside the 52 weeks. Shown next to
             # Δ Capacity because it is the sole reason that column moves: each
             # delivery cancels one idle-slot charge, so earlier start weeks look
             # cheaper purely by fitting one more in before the horizon ends.
-            "Deliveries in horizon": getattr(opt, "generators_added", 0),
+            "Deliveries": getattr(opt, "generators_added", 0),
             "Δ Capacity": usd_signed(opt.delta_capacity),
             "Δ Composite": usd_signed(opt.delta_composite),
             "OT Weeks": opt.overtime_weeks,

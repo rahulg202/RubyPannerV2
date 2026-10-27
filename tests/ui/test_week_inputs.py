@@ -305,11 +305,11 @@ def test_rankings_frame_dates_the_week_column():
 
     frame = rankings_frame([_Option(3)], ["NEW-1"],
                            [(3, date(2026, 1, 19), None)])
-    assert frame.loc[0, "NEW-1 week"] == "3 — 19 Jan 2026"
+    assert frame.loc[0, "Week for NEW-1"] == "3 — 19 Jan 2026"
 
 
 def test_rankings_frame_without_dates_shows_the_number():
     from ui.formatting import rankings_frame
 
     frame = rankings_frame([_Option(3)], ["NEW-1"], None)
-    assert frame.loc[0, "NEW-1 week"] == "3"
+    assert frame.loc[0, "Week for NEW-1"] == "3"

@@ -164,7 +164,7 @@ def test_rankings_frame_has_column_per_customer():
     opts = [CombinationResult(selected_weeks={"N1": 3, "N2": 7}, feasible=True,
                               delta_composite=-100.0)]
     out = F.rankings_frame(opts, ["N1", "N2"])
-    assert "N1 week" in out.columns and "N2 week" in out.columns
+    assert "Week for N1" in out.columns and "Week for N2" in out.columns
 
 
 # ---------------------------------------------------------------------------

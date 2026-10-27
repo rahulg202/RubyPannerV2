@@ -371,7 +371,14 @@ def _render_fixed_rankings(result, customers) -> None:
         }
         row.update({
             "Added cost": usd_signed(option.added_cost),
-            "Generators": option.generators,
+            # The same two components the re-planning mode reports as deltas, so
+            # the two modes read in one vocabulary. Here they are not deltas
+            # against a re-optimized plan -- the plan does not move -- but they
+            # measure the same two things: stock held early, and extra batches.
+            # They always sum to Added cost.
+            "Δ Penalty": usd_signed(option.holding_cost),
+            "Δ Overtime": usd_signed(option.overtime_cost),
+            "Deliveries": option.generators,
             "Fit a spare slot": option.fits,
             "Absorbed by existing overtime": option.absorbed,
             "Needed new overtime": option.overtime_added,
@@ -388,13 +395,14 @@ def _render_fixed_rankings(result, customers) -> None:
         )
     st.caption(
         "Each row is one candidate start week. **Added cost** is what slotting "
-        "the site in costs on top of your current "
-        "plan: a third batch where a week is full, or holding cost where a "
-        "generator has to be built early. Zero means it fits with no disruption. "
-        "**Absorbed by existing overtime** means the week already runs a third "
-        "batch and had room, so there is no extra charge. Idle-capacity cost is "
-        "not included here — your plan is fixed, so its utilisation does not "
-        "change."
+        "the site in costs on top of your current plan, and splits into "
+        "**Δ Penalty** (stock built early and held) and **Δ Overtime** (third "
+        "batches in weeks that were already full). Zero means it fits with no "
+        "disruption. **Absorbed by existing overtime** means the week already "
+        "runs a third batch and had room, so there is no extra charge. "
+        "Idle-capacity cost is not included here — your plan is fixed, so its "
+        "utilisation does not change, and there is no Δ Capacity or Δ Composite "
+        "for the same reason."
     )
 
     best = options[0]
@@ -429,11 +437,11 @@ def _render_selection_metrics(selected, fixed_mode: bool) -> None:
         cols[0].metric("Added cost", usd_signed(selected.added_cost),
                        help="What slotting these customers into your existing "
                             "plan costs. Zero means they fit with no disruption.")
-        cols[1].metric("Overtime", usd_signed(selected.overtime_cost),
-                       help="Third batches needed in weeks that were already full.")
-        cols[2].metric("Holding", usd_signed(selected.holding_cost),
+        cols[1].metric("Δ Penalty", usd_signed(selected.holding_cost),
                        help="Cost of building a generator early and holding it "
                             "because its own week was full.")
+        cols[2].metric("Δ Overtime", usd_signed(selected.overtime_cost),
+                       help="Third batches needed in weeks that were already full.")
         cols[3].metric(
             "Fits with no disruption",
             "Yes" if selected.fits_cleanly else "No",
@@ -459,7 +467,7 @@ def _render_selection_metrics(selected, fixed_mode: bool) -> None:
 
     cols = st.columns(4)
     cols[0].metric(
-        "Added cost of these weeks", usd_signed(marginal),
+        "Added cost", usd_signed(marginal),
         help="Penalty plus overtime: the cost that actually changes with the start "
              "weeks you pick. Idle-capacity cost is excluded, because it moves only "
              "with how many deliveries land inside the 52-week window rather than "
@@ -470,7 +478,7 @@ def _render_selection_metrics(selected, fixed_mode: bool) -> None:
     cols[2].metric("Δ Overtime", usd_signed(selected.delta_overtime),
                    help="Change in overtime cost.")
     cols[3].metric(
-        "Deliveries in horizon", added,
+        "Deliveries", added,
         help="Generators these start weeks need before week 52. Later start weeks "
              "fit fewer, which is the only reason the whole-plan total moves "
              "between candidates.",
@@ -535,13 +543,13 @@ def _render_rankings(result, customers) -> None:
             # Composite and Δ Capacity are dominated by it, which is why neither
             # is ranked on any more.
             st.caption(
-                "**Read Δ Marginal, not Δ Composite.** Δ Capacity falls by roughly "
+                "**Read Added cost, not Δ Composite.** Δ Capacity falls by roughly "
                 "the capacity rate for every delivery the new site needs, because "
                 "each one takes a slot that would otherwise have sat idle and been "
                 "charged for. Since a later start week fits fewer deliveries inside "
-                "the 52 weeks — see *Deliveries in horizon* — earlier weeks always "
-                "look cheaper on Δ Composite, for reasons of where the horizon ends "
-                "rather than anything operational. Δ Marginal leaves that out and "
+                "the 52 weeks — see *Deliveries* — earlier weeks always look "
+                "cheaper on Δ Composite, for reasons of where the horizon ends "
+                "rather than anything operational. Added cost leaves that out and "
                 "shows only what genuinely responds to the choice."
             )
 
